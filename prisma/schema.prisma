@@ -26,6 +26,7 @@ enum AssetStatus {
 
 model Screen {
   id             String      @id @default(cuid())
+  screenNumber   Int         @unique
   name           String
   deviceId       String?     @unique
   activationCode String      @unique

@@ -1,3 +1,4 @@
+// lib/prisma.ts
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
@@ -7,42 +8,40 @@ const globalForPrisma = globalThis as unknown as {
   pgPool?: Pool;
 };
 
-function makeClient() {
+function getClient(): PrismaClient {
   const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error("Missing DATABASE_URL");
 
-  if (!connectionString) {
-    throw new Error("Missing DATABASE_URL");
+  // Cache pool/client globally to avoid creating multiples on Vercel.
+  if (!globalForPrisma.pgPool) {
+    globalForPrisma.pgPool = new Pool({
+      connectionString,
+      // Optional guardrails if you start seeing connection pressure:
+      // max: 5,
+      // idleTimeoutMillis: 30_000,
+      // connectionTimeoutMillis: 10_000,
+    });
   }
 
-  const pool =
-    globalForPrisma.pgPool ??
-    new Pool({
-      connectionString,
-    });
-
-  const adapter = new PrismaPg(pool);
-
-  const client =
-    globalForPrisma.prisma ??
-    new PrismaClient({
+  if (!globalForPrisma.prisma) {
+    const adapter = new PrismaPg(globalForPrisma.pgPool);
+    globalForPrisma.prisma = new PrismaClient({
       adapter,
       log: ["error", "warn"],
     });
-
-  if (process.env.NODE_ENV !== "production") {
-    globalForPrisma.prisma = client;
-    globalForPrisma.pgPool = pool;
   }
 
-  return client;
+  return globalForPrisma.prisma;
 }
 
-// Export a proxy so importing this module never throws during build.
-// It only throws when you actually hit the DB.
-export const prisma: PrismaClient = new Proxy({} as PrismaClient, {
+// Lazy proxy so importing never throws during build; throws only when used.
+export const prisma = new Proxy({} as PrismaClient, {
   get(_target, prop) {
-    const client = makeClient();
-    // @ts-expect-error - runtime proxy passthrough
-    return client[prop];
+    const client = getClient();
+    // TS-safe dynamic member access:
+    return Reflect.get(client as unknown as object, prop);
   },
-});
+}) as PrismaClient;
+
+// Optional: allow `import prisma from "@/lib/prisma"`
+export default prisma;
