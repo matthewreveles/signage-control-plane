@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import type { ScheduleWindow } from "@prisma/client";
 
 export const runtime = "nodejs";
 
 type Ctx = { params: Promise<{ deviceId: string }> };
+
+type ScheduleLike = {
+  startAt: Date;
+  endAt: Date;
+  priority: number;
+};
 
 export async function GET(_req: Request, ctx: Ctx) {
   const { deviceId } = await ctx.params;
@@ -34,8 +39,8 @@ export async function GET(_req: Request, ctx: Ctx) {
   const now = new Date();
 
   const activeSchedule = screen.schedules
-    .filter((s: ScheduleWindow) => s.startAt <= now && s.endAt >= now)
-    .sort((a, b) => b.priority - a.priority)[0];
+    .filter((s: ScheduleLike) => s.startAt <= now && s.endAt >= now)
+    .sort((a: ScheduleLike, b: ScheduleLike) => b.priority - a.priority)[0];
 
   if (!activeSchedule) {
     return NextResponse.json({
