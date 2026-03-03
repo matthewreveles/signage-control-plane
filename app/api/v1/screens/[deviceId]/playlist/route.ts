@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import type { ScheduleWindow } from "@prisma/client";
 
 export const runtime = "nodejs";
 
@@ -33,7 +34,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   const now = new Date();
 
   const activeSchedule = screen.schedules
-    .filter((s) => s.startAt <= now && s.endAt >= now)
+    .filter((s: ScheduleWindow) => s.startAt <= now && s.endAt >= now)
     .sort((a, b) => b.priority - a.priority)[0];
 
   if (!activeSchedule) {
