@@ -1,0 +1,142 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Orientation {
+  LANDSCAPE
+  PORTRAIT
+}
+
+enum AssetType {
+  IMAGE
+  VIDEO
+}
+
+enum AssetStatus {
+  PROCESSING
+  READY
+  FAILED
+}
+
+model Screen {
+  id             String      @id @default(cuid())
+  name           String
+  deviceId       String?     @unique
+  activationCode String      @unique
+  orientation    Orientation
+  width          Int
+  height         Int
+  timezone       String      @default("America/Phoenix")
+  lastSeenAt     DateTime?
+
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  schedules      ScheduleWindow[]
+  logs           ProofOfPlayLog[]
+}
+
+model Asset {
+  id            String      @id @default(cuid())
+  name          String
+  type          AssetType
+  orientation   Orientation
+  masterUrl     String
+  status        AssetStatus @default(PROCESSING)
+  durationSec   Int?
+
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  renditions    AssetRendition[]
+  playlistItems PlaylistItem[]
+  logs          ProofOfPlayLog[]
+}
+
+model AssetRendition {
+  id        String   @id @default(cuid())
+
+  assetId   String
+  asset     Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  url       String
+  width     Int
+  height    Int
+  codec     String?
+  bitrate   Int?
+  filesize  Int?
+
+  createdAt DateTime @default(now())
+}
+
+model Playlist {
+  id        String   @id @default(cuid())
+  name      String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items     PlaylistItem[]
+  schedules ScheduleWindow[]
+}
+
+model PlaylistItem {
+  id           String   @id @default(cuid())
+
+  playlistId   String
+  playlist     Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+
+  assetId      String
+  asset        Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  sortOrder    Int      @default(0)
+  durationSec  Int?
+
+  createdAt    DateTime @default(now())
+
+  @@index([playlistId, sortOrder])
+}
+
+model ScheduleWindow {
+  id          String   @id @default(cuid())
+
+  screenId    String
+  screen      Screen   @relation(fields: [screenId], references: [id], onDelete: Cascade)
+
+  playlistId  String
+  playlist    Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+
+  priority    Int      @default(10)
+  startAt     DateTime
+  endAt       DateTime
+
+  createdAt   DateTime @default(now())
+
+  @@index([screenId, startAt, endAt])
+}
+
+model ProofOfPlayLog {
+  id          String   @id @default(cuid())
+
+  screenId    String
+  screen      Screen   @relation(fields: [screenId], references: [id], onDelete: Cascade)
+
+  assetId     String
+  asset       Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  startedAt   DateTime
+  endedAt     DateTime
+  durationSec Int
+
+  createdAt   DateTime @default(now())
+
+  @@index([screenId, createdAt])
+  @@index([assetId, createdAt])
+}
