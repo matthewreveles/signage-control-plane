@@ -1,12 +1,15 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-export async function GET(
-  _req: Request,
-  { params }: { params: { deviceId: string } }
-) {
+export const runtime = "nodejs";
+
+type Ctx = { params: Promise<{ deviceId: string }> };
+
+export async function GET(_req: Request, ctx: Ctx) {
+  const { deviceId } = await ctx.params;
+
   const screen = await prisma.screen.findUnique({
-    where: { deviceId: params.deviceId },
+    where: { deviceId },
     include: {
       schedules: {
         include: {
@@ -53,7 +56,7 @@ export async function GET(
     .map((pi) => ({
       assetId: pi.asset.id,
       type: pi.asset.type,
-      url: pi.asset.masterUrl, // MVP: use master directly
+      url: pi.asset.masterUrl,
       durationSeconds:
         pi.asset.type === "VIDEO"
           ? pi.asset.durationSec ?? 15
