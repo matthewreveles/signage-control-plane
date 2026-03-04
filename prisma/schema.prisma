@@ -49,38 +49,50 @@ enum ContentEntryStatus {
   ARCHIVED
 }
 
+/* --- Playlist widgets --- */
+enum PlaylistItemKind {
+  ASSET
+  COLLECTION_WIDGET
+}
+
+enum WidgetRenderMode {
+  TICKER
+  LIST
+  GRID
+}
+
 model Screen {
-  id             String      @id @default(cuid())
-  screenNumber   Int         @unique
-  name           String
+  id              String   @id @default(cuid())
+  screenNumber    Int      @unique
+  name            String
 
-  deviceId       String?     @unique
-  activationCode String      @unique
-  orientation    Orientation
-  width          Int
-  height         Int
-  timezone       String      @default("America/Phoenix")
-  lastSeenAt     DateTime?
+  deviceId        String?  @unique
+  activationCode  String   @unique
+  orientation     Orientation
+  width           Int
+  height          Int
+  timezone        String   @default("America/Phoenix")
+  lastSeenAt      DateTime?
 
-  createdAt      DateTime    @default(now())
-  updatedAt      DateTime    @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  schedules      ScheduleWindow[]
-  logs           ProofOfPlayLog[]
+  schedules       ScheduleWindow[]
+  logs            ProofOfPlayLog[]
 
-  groupMembers   ScreenGroupMember[]
+  groupMembers    ScreenGroupMember[]
   campaignTargets CampaignTarget[]
 }
 
 model ScreenGroup {
-  id          String   @id @default(cuid())
-  name        String
-  description String?
+  id              String   @id @default(cuid())
+  name            String
+  description     String?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  members     ScreenGroupMember[]
+  members         ScreenGroupMember[]
   campaignTargets CampaignTarget[]
 }
 
@@ -152,8 +164,16 @@ model PlaylistItem {
   playlistId   String
   playlist     Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
 
-  assetId      String
-  asset        Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  // ASSET item
+  assetId      String?
+  asset        Asset?   @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  // COLLECTION_WIDGET item
+  collectionId String?
+  collection   ContentCollection? @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+
+  kind         PlaylistItemKind   @default(ASSET)
+  renderMode   WidgetRenderMode?
 
   sortOrder    Int      @default(0)
   durationSec  Int?
@@ -161,6 +181,7 @@ model PlaylistItem {
   createdAt    DateTime @default(now())
 
   @@index([playlistId, sortOrder])
+  @@index([collectionId])
 }
 
 model Campaign {
@@ -187,20 +208,20 @@ model Campaign {
 }
 
 model CampaignTarget {
-  id          String            @id @default(cuid())
+  id          String             @id @default(cuid())
   type        CampaignTargetType
 
   campaignId  String
-  campaign    Campaign          @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaign    Campaign           @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
   // Exactly one of these is set, depending on type
   screenId    String?
-  screen      Screen?           @relation(fields: [screenId], references: [id], onDelete: Cascade)
+  screen      Screen?            @relation(fields: [screenId], references: [id], onDelete: Cascade)
 
   groupId     String?
-  group       ScreenGroup?      @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  group       ScreenGroup?       @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
-  createdAt   DateTime          @default(now())
+  createdAt   DateTime           @default(now())
 
   @@index([campaignId])
   @@index([screenId])
@@ -216,7 +237,6 @@ model ScheduleWindow {
   playlistId  String
   playlist    Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
 
-  // Optional link back to a Campaign (for publish/upsert)
   campaignId  String?
   campaign    Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
 
@@ -260,12 +280,13 @@ model ContentCollection {
   updatedAt   DateTime @updatedAt
 
   entries     ContentEntry[]
+  playlistItems PlaylistItem[]
 }
 
 model ContentEntry {
-  id            String            @id @default(cuid())
+  id            String             @id @default(cuid())
   collectionId  String
-  collection    ContentCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  collection    ContentCollection  @relation(fields: [collectionId], references: [id], onDelete: Cascade)
 
   title         String
   body          String?
@@ -275,7 +296,7 @@ model ContentEntry {
   endAt         DateTime?
 
   assetId       String?
-  asset         Asset?            @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  asset         Asset?             @relation(fields: [assetId], references: [id], onDelete: SetNull)
 
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
