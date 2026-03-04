@@ -35,14 +35,27 @@ export default async function Home() {
               Screens, playlists, schedules, proof-of-play.
             </p>
           </div>
-          <div className="text-xs text-zinc-500 dark:text-zinc-400">
-            v0
-          </div>
+
+          <nav className="flex items-center gap-4 text-sm font-medium">
+            <a href="/" className="text-zinc-900 dark:text-white">Screens</a>
+            <a
+              href="/campaigns"
+              className="text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white"
+            >
+              Campaigns
+            </a>
+            <a
+              href="/content"
+              className="text-zinc-700 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white"
+            >
+              Content
+            </a>
+          </nav>
         </div>
       </header>
 
       <main className="mx-auto max-w-5xl px-6 py-8">
-        <ScreensPanel initialScreens={screens} />
+        <ScreensPanel initialScreens={screens as any} />
       </main>
     </div>
   );
