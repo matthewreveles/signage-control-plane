@@ -8,6 +8,12 @@ type Screen = { id: string; screenNumber: number; name: string; orientation: Ori
 type Group = { id: string; name: string };
 type Playlist = { id: string; name: string };
 type Asset = { id: string; name: string; type: "IMAGE" | "VIDEO" };
+type CreativePackage = {
+  id: string;
+  name: string;
+  brand: string;
+  variants: Array<{ destination: "SIGNAGE" | "REVIVE" }>;
+};
 
 type Campaign = {
   id: string;
@@ -19,7 +25,12 @@ type Campaign = {
   endAt: string;
   playlistId: string;
   playlist?: Playlist;
-  targets: Array<any>;
+  targets: Array<{
+    id: string;
+    type: "SCREEN" | "GROUP";
+    screenId: string | null;
+    groupId: string | null;
+  }>;
 };
 
 function toLocalInputValue(d: Date) {
@@ -31,12 +42,14 @@ export default function CampaignsPanel({
   initialCampaigns,
   playlists,
   assets,
+  creativePackages,
   screens,
   groups,
 }: {
   initialCampaigns: Campaign[];
   playlists: Playlist[];
   assets: Asset[];
+  creativePackages: CreativePackage[];
   screens: Screen[];
   groups: Group[];
 }) {
@@ -52,9 +65,14 @@ export default function CampaignsPanel({
   const [startAt, setStartAt] = useState(toLocalInputValue(now));
   const [endAt, setEndAt] = useState(toLocalInputValue(new Date(now.getTime() + 60 * 60 * 1000)));
 
-  const [mode, setMode] = useState<"PLAYLIST" | "ASSET">("PLAYLIST");
+  const [mode, setMode] = useState<"PLAYLIST" | "PACKAGE" | "ASSET">(
+    creativePackages.length ? "PACKAGE" : "PLAYLIST",
+  );
   const [playlistId, setPlaylistId] = useState<string>(playlists[0]?.id ?? "");
   const [assetId, setAssetId] = useState<string>(assets[0]?.id ?? "");
+  const [creativePackageId, setCreativePackageId] = useState<string>(
+    creativePackages[0]?.id ?? "",
+  );
 
   const [screenIds, setScreenIds] = useState<string[]>([]);
   const [groupIds, setGroupIds] = useState<string[]>([]);
@@ -63,10 +81,11 @@ export default function CampaignsPanel({
     if (!name.trim()) return false;
     if (!startAt || !endAt) return false;
     if (mode === "PLAYLIST" && !playlistId) return false;
+    if (mode === "PACKAGE" && !creativePackageId) return false;
     if (mode === "ASSET" && !assetId) return false;
     if (screenIds.length === 0 && groupIds.length === 0) return false;
     return true;
-  }, [name, startAt, endAt, mode, playlistId, assetId, screenIds, groupIds]);
+  }, [name, startAt, endAt, mode, playlistId, creativePackageId, assetId, screenIds, groupIds]);
 
   async function createCampaign() {
     if (!canCreate) return;
@@ -83,6 +102,7 @@ export default function CampaignsPanel({
           startAt: new Date(startAt).toISOString(),
           endAt: new Date(endAt).toISOString(),
           playlistId: mode === "PLAYLIST" ? playlistId : undefined,
+          creativePackageId: mode === "PACKAGE" ? creativePackageId : undefined,
           assetId: mode === "ASSET" ? assetId : undefined,
           screenIds,
           groupIds,
@@ -196,6 +216,16 @@ export default function CampaignsPanel({
                 Playlist
               </button>
               <button
+                onClick={() => setMode("PACKAGE")}
+                className={`h-10 flex-1 rounded-xl border px-3 text-sm font-medium ${
+                  mode === "PACKAGE"
+                    ? "border-emerald-300 bg-emerald-100 text-emerald-950 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-100"
+                    : "border-zinc-800 bg-black text-zinc-50 dark:border-zinc-800 dark:bg-black"
+                }`}
+              >
+                Factory package
+              </button>
+              <button
                 onClick={() => setMode("ASSET")}
                 className={`h-10 flex-1 rounded-xl border px-3 text-sm font-medium ${
                   mode === "ASSET"
@@ -222,6 +252,31 @@ export default function CampaignsPanel({
                   </option>
                 ))}
               </select>
+            </label>
+          ) : mode === "PACKAGE" ? (
+            <label className="grid gap-1 sm:col-span-2">
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                Approved creative package
+              </span>
+              <select
+                value={creativePackageId}
+                onChange={(e) => setCreativePackageId(e.target.value)}
+                className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm outline-none dark:border-zinc-800 dark:bg-black"
+              >
+                {creativePackages.map((creativePackage) => {
+                  const signageCount = creativePackage.variants.filter(
+                    (variant) => variant.destination === "SIGNAGE",
+                  ).length;
+                  return (
+                    <option key={creativePackage.id} value={creativePackage.id}>
+                      {creativePackage.brand} — {creativePackage.name} ({signageCount} screen variants)
+                    </option>
+                  );
+                })}
+              </select>
+              <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                The player selects the best landscape or portrait variant for each screen.
+              </span>
             </label>
           ) : (
             <label className="grid gap-1 sm:col-span-2">

@@ -24,7 +24,22 @@ enum AssetStatus {
   FAILED
 }
 
-/* --- Campaigns --- */
+enum CreativePackageStatus {
+  DRAFT
+  PROCESSING
+  REVIEW
+  APPROVED
+  FAILED
+}
+
+enum CreativeDestination {
+  SIGNAGE
+  REVIVE
+}
+
+/**
+ * --- Campaigns ---
+ */
 enum CampaignStatus {
   DRAFT
   PUBLISHED
@@ -36,7 +51,9 @@ enum CampaignTargetType {
   GROUP
 }
 
-/* --- Structured vendor input --- */
+/**
+ * --- Structured vendor input ---
+ */
 enum ContentCollectionType {
   MENU
   DROPS
@@ -49,9 +66,12 @@ enum ContentEntryStatus {
   ARCHIVED
 }
 
-/* --- Playlist widgets --- */
+/**
+ * --- Playlist widgets ---
+ */
 enum PlaylistItemKind {
   ASSET
+  CREATIVE_PACKAGE
   COLLECTION_WIDGET
 }
 
@@ -62,48 +82,49 @@ enum WidgetRenderMode {
 }
 
 model Screen {
-  id              String   @id @default(cuid())
-  screenNumber    Int      @unique
-  name            String
+  id           String @id @default(cuid())
+  screenNumber Int    @unique
+  name         String
 
-  deviceId        String?  @unique
-  activationCode  String   @unique
+  deviceId        String?     @unique
+  deviceTokenHash String?
+  activationCode  String      @unique
   orientation     Orientation
   width           Int
   height          Int
-  timezone        String   @default("America/Phoenix")
+  timezone        String      @default("America/Phoenix")
   lastSeenAt      DateTime?
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  schedules       ScheduleWindow[]
-  logs            ProofOfPlayLog[]
+  schedules ScheduleWindow[]
+  logs      ProofOfPlayLog[]
 
   groupMembers    ScreenGroupMember[]
   campaignTargets CampaignTarget[]
 }
 
 model ScreenGroup {
-  id              String   @id @default(cuid())
-  name            String
-  description     String?
+  id          String  @id @default(cuid())
+  name        String
+  description String?
 
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   members         ScreenGroupMember[]
   campaignTargets CampaignTarget[]
 }
 
 model ScreenGroupMember {
-  id        String   @id @default(cuid())
+  id String @id @default(cuid())
 
-  groupId   String
-  group     ScreenGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  groupId String
+  group   ScreenGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
-  screenId  String
-  screen    Screen      @relation(fields: [screenId], references: [id], onDelete: Cascade)
+  screenId String
+  screen   Screen @relation(fields: [screenId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
 
@@ -112,43 +133,44 @@ model ScreenGroupMember {
 }
 
 model Asset {
-  id            String      @id @default(cuid())
-  name          String
-  type          AssetType
-  orientation   Orientation
-  masterUrl     String
-  status        AssetStatus @default(PROCESSING)
-  durationSec   Int?
+  id          String      @id @default(cuid())
+  name        String
+  type        AssetType
+  orientation Orientation
+  masterUrl   String
+  status      AssetStatus @default(PROCESSING)
+  durationSec Int?
 
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   renditions    AssetRendition[]
   playlistItems PlaylistItem[]
   logs          ProofOfPlayLog[]
 
-  contentEntries ContentEntry[]
+  contentEntries   ContentEntry[]
+  creativeVariants CreativeVariant[]
 }
 
 model AssetRendition {
-  id        String   @id @default(cuid())
+  id String @id @default(cuid())
 
-  assetId   String
-  asset     Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  assetId String
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
-  url       String
-  width     Int
-  height    Int
-  codec     String?
-  bitrate   Int?
-  filesize  Int?
+  url      String
+  width    Int
+  height   Int
+  codec    String?
+  bitrate  Int?
+  filesize Int?
 
   createdAt DateTime @default(now())
 }
 
 model Playlist {
-  id        String   @id @default(cuid())
-  name      String
+  id   String @id @default(cuid())
+  name String
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -159,29 +181,72 @@ model Playlist {
 }
 
 model PlaylistItem {
-  id           String   @id @default(cuid())
+  id String @id @default(cuid())
 
-  playlistId   String
-  playlist     Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  playlistId String
+  playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
 
   // ASSET item
-  assetId      String?
-  asset        Asset?   @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  assetId String?
+  asset   Asset?  @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
   // COLLECTION_WIDGET item
   collectionId String?
   collection   ContentCollection? @relation(fields: [collectionId], references: [id], onDelete: Cascade)
 
-  kind         PlaylistItemKind   @default(ASSET)
-  renderMode   WidgetRenderMode?
+  // CREATIVE_PACKAGE item
+  creativePackageId String?
+  creativePackage   CreativePackage? @relation(fields: [creativePackageId], references: [id], onDelete: Cascade)
 
-  sortOrder    Int      @default(0)
-  durationSec  Int?
+  kind       PlaylistItemKind  @default(ASSET)
+  renderMode WidgetRenderMode?
 
-  createdAt    DateTime @default(now())
+  sortOrder   Int  @default(0)
+  durationSec Int?
+
+  createdAt DateTime @default(now())
 
   @@index([playlistId, sortOrder])
   @@index([collectionId])
+  @@index([creativePackageId])
+}
+
+model CreativePackage {
+  id              String                @id @default(cuid())
+  name            String
+  brand           String
+  campaignMessage String?
+  cta             String?
+  sourceSystem    String                @default("GSPAN_AI_FACTORY")
+  sourceJobId     String?
+  status          CreativePackageStatus @default(REVIEW)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  variants      CreativeVariant[]
+  playlistItems PlaylistItem[]
+
+  @@index([status, createdAt])
+  @@index([brand, createdAt])
+  @@index([sourceJobId])
+}
+
+model CreativeVariant {
+  id          String              @id @default(cuid())
+  packageId   String
+  package     CreativePackage     @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  assetId     String              @unique
+  asset       Asset               @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  destination CreativeDestination
+  presetKey   String
+  width       Int
+  height      Int
+
+  createdAt DateTime @default(now())
+
+  @@unique([packageId, destination, presetKey])
+  @@index([destination, width, height])
 }
 
 model Campaign {
@@ -190,38 +255,38 @@ model Campaign {
   description String?
   status      CampaignStatus @default(DRAFT)
 
-  timezone    String         @default("America/Phoenix")
-  priority    Int            @default(10)
-  startAt     DateTime
-  endAt       DateTime
+  timezone String   @default("America/Phoenix")
+  priority Int      @default(10)
+  startAt  DateTime
+  endAt    DateTime
 
-  playlistId  String
-  playlist    Playlist       @relation(fields: [playlistId], references: [id], onDelete: Restrict)
+  playlistId String
+  playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Restrict)
 
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  targets     CampaignTarget[]
-  schedules   ScheduleWindow[]
+  targets   CampaignTarget[]
+  schedules ScheduleWindow[]
 
   @@index([status, startAt, endAt])
 }
 
 model CampaignTarget {
-  id          String             @id @default(cuid())
-  type        CampaignTargetType
+  id   String             @id @default(cuid())
+  type CampaignTargetType
 
-  campaignId  String
-  campaign    Campaign           @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
   // Exactly one of these is set, depending on type
-  screenId    String?
-  screen      Screen?            @relation(fields: [screenId], references: [id], onDelete: Cascade)
+  screenId String?
+  screen   Screen? @relation(fields: [screenId], references: [id], onDelete: Cascade)
 
-  groupId     String?
-  group       ScreenGroup?       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  groupId String?
+  group   ScreenGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
-  createdAt   DateTime           @default(now())
+  createdAt DateTime @default(now())
 
   @@index([campaignId])
   @@index([screenId])
@@ -229,77 +294,78 @@ model CampaignTarget {
 }
 
 model ScheduleWindow {
-  id          String   @id @default(cuid())
+  id String @id @default(cuid())
 
-  screenId    String
-  screen      Screen   @relation(fields: [screenId], references: [id], onDelete: Cascade)
+  screenId String
+  screen   Screen @relation(fields: [screenId], references: [id], onDelete: Cascade)
 
-  playlistId  String
-  playlist    Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  playlistId String
+  playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
 
-  campaignId  String?
-  campaign    Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  campaignId String?
+  campaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
 
-  priority    Int      @default(10)
-  startAt     DateTime
-  endAt       DateTime
+  priority Int      @default(10)
+  startAt  DateTime
+  endAt    DateTime
 
-  createdAt   DateTime @default(now())
+  createdAt DateTime @default(now())
 
+  @@unique([campaignId, screenId])
   @@index([screenId, startAt, endAt])
   @@index([campaignId])
-  @@unique([campaignId, screenId])
 }
 
 model ProofOfPlayLog {
-  id          String   @id @default(cuid())
+  id         String  @id @default(cuid())
+  playbackId String? @unique
 
-  screenId    String
-  screen      Screen   @relation(fields: [screenId], references: [id], onDelete: Cascade)
+  screenId String
+  screen   Screen @relation(fields: [screenId], references: [id], onDelete: Cascade)
 
-  assetId     String
-  asset       Asset    @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  assetId String
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
   startedAt   DateTime
   endedAt     DateTime
   durationSec Int
 
-  createdAt   DateTime @default(now())
+  createdAt DateTime @default(now())
 
   @@index([screenId, createdAt])
   @@index([assetId, createdAt])
 }
 
 model ContentCollection {
-  id          String               @id @default(cuid())
+  id          String                @id @default(cuid())
   name        String
   type        ContentCollectionType
   description String?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  entries     ContentEntry[]
+  entries       ContentEntry[]
   playlistItems PlaylistItem[]
 }
 
 model ContentEntry {
-  id            String             @id @default(cuid())
-  collectionId  String
-  collection    ContentCollection  @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  id           String            @id @default(cuid())
+  collectionId String
+  collection   ContentCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
 
-  title         String
-  body          String?
-  status        ContentEntryStatus @default(DRAFT)
+  title  String
+  body   String?
+  status ContentEntryStatus @default(DRAFT)
 
-  startAt       DateTime?
-  endAt         DateTime?
+  startAt DateTime?
+  endAt   DateTime?
 
-  assetId       String?
-  asset         Asset?             @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  assetId String?
+  asset   Asset?  @relation(fields: [assetId], references: [id], onDelete: SetNull)
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([collectionId, status])
   @@index([startAt, endAt])

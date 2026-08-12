@@ -22,7 +22,7 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const body = await req.json().catch(() => ({} as any));
+  const body = await req.json().catch(() => ({}));
 
   const name = typeof body.name === "string" ? body.name.trim() : "";
   if (!name) return NextResponse.json({ error: "Name is required" }, { status: 400 });
@@ -56,17 +56,34 @@ export async function POST(req: Request) {
 
   const playlistId = typeof body.playlistId === "string" ? body.playlistId : null;
   const assetId = typeof body.assetId === "string" ? body.assetId : null;
+  const creativePackageId =
+    typeof body.creativePackageId === "string" ? body.creativePackageId : null;
 
-  if (!playlistId && !assetId) {
-    return NextResponse.json({ error: "Provide playlistId or assetId" }, { status: 400 });
+  if (!playlistId && !assetId && !creativePackageId) {
+    return NextResponse.json(
+      { error: "Provide playlistId, assetId or creativePackageId" },
+      { status: 400 },
+    );
   }
 
-  // If assetId is provided, auto-create a 1-item playlist for this campaign.
+  // Assets and Factory packages each become a one-item playlist behind the scenes.
   const resolvedPlaylistId = await prisma.$transaction(async (tx) => {
     if (playlistId) return playlistId;
 
-    const asset = await tx.asset.findUnique({ where: { id: assetId! } });
-    if (!asset) throw new Error("Unknown assetId");
+    const asset = assetId
+      ? await tx.asset.findUnique({ where: { id: assetId } })
+      : null;
+    if (assetId && !asset) throw new Error("Unknown assetId");
+
+    const creativePackage = creativePackageId
+      ? await tx.creativePackage.findUnique({ where: { id: creativePackageId } })
+      : null;
+    if (creativePackageId && !creativePackage) {
+      throw new Error("Unknown creativePackageId");
+    }
+    if (creativePackage && creativePackage.status !== "APPROVED") {
+      throw new Error("Creative package must be approved before scheduling");
+    }
 
     const pl = await tx.playlist.create({
       data: { name: `Campaign Playlist: ${name}` },
@@ -75,9 +92,11 @@ export async function POST(req: Request) {
     await tx.playlistItem.create({
       data: {
         playlistId: pl.id,
-        assetId: asset.id,
+        kind: creativePackage ? "CREATIVE_PACKAGE" : "ASSET",
+        assetId: asset?.id ?? null,
+        creativePackageId: creativePackage?.id ?? null,
         sortOrder: 0,
-        durationSec: asset.type === "IMAGE" ? 10 : null,
+        durationSec: asset?.type === "IMAGE" || creativePackage ? 10 : null,
       },
     });
 
