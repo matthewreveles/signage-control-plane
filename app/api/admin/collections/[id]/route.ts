@@ -9,7 +9,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const { id } = await ctx.params;
   const body = await req.json().catch(() => ({}));
 
-  const data: any = {};
+  const data: { name?: string; description?: string | null } = {};
 
   if (typeof body.name === "string") {
     const n = body.name.trim();

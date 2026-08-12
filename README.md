@@ -1,36 +1,50 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# G-SPAN Screen Network
 
-## Getting Started
+The Screen Network control plane receives approved creative packages from the G-SPAN AI Factory, schedules them as campaigns and resolves the best rendition for each paired display.
 
-First, run the development server:
+## Proof-of-concept flow
+
+1. AI Factory generates a brand-aware package.
+2. `POST /api/admin/creative-packages` imports its manifest.
+3. An operator reviews landscape and portrait coverage in `/packages`.
+4. Approval makes the complete package available in `/campaigns`.
+5. A browser player pairs at `/player` with the activation code from `/`.
+6. The player polls its device playlist, receives the best matching variant and reports heartbeat and proof-of-play events.
+
+The package remains one campaign object throughout the workflow. Revive variants are preserved in the same manifest for downstream web-ad delivery; Screen Network variants are selected at playback according to the target display's orientation, aspect ratio and resolution.
+
+## Preset families
+
+Screen Network:
+
+- 1920×1080 HD landscape
+- 3840×2160 4K landscape
+- 1080×1920 HD portrait
+- 2160×3840 4K portrait
+
+Revive display:
+
+- 728×90 leaderboard
+- 300×250 medium rectangle
+- 160×600 wide skyscraper
+- 320×50 mobile leaderboard
+- 320×100 large mobile banner
+
+## Local development
 
 ```bash
+npm install
+npx prisma migrate dev
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The application requires `DATABASE_URL` for a PostgreSQL database.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Verification
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run smoke:screen-network
+npm run typecheck
+npm run lint
+npm run build
+```

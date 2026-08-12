@@ -46,9 +46,14 @@ export async function POST(req: Request) {
       });
 
       return NextResponse.json(screen);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Prisma unique constraint violation (screenNumber collision)
-      if (err?.code === "P2002") continue;
+      if (
+        typeof err === "object" &&
+        err !== null &&
+        "code" in err &&
+        err.code === "P2002"
+      ) continue;
       throw err;
     }
   }

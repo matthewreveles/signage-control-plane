@@ -15,6 +15,8 @@ type ScreenRow = {
   height: number;
   timezone: string;
   lastSeenAt: string | Date | null;
+  logs?: Array<{ createdAt: string | Date; asset: { name: string } }>;
+  _count?: { logs: number };
   createdAt: string | Date;
   updatedAt: string | Date;
 };
@@ -138,6 +140,22 @@ export default function ScreensPanel({ initialScreens }: Props) {
     await patchScreen(id, { name: trimmed });
   }
 
+  async function resetPairing(id: string) {
+    const confirmed = window.confirm(
+      "Reset this pairing? The current player will stop receiving campaigns until it is paired again.",
+    );
+    if (!confirmed) return;
+
+    const res = await fetch(`/api/admin/screens/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resetPairing: true }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const updated = (await res.json()) as ScreenRow;
+    setScreens((current) => current.map((screen) => (screen.id === id ? updated : screen)));
+  }
+
   function openEdit(id: string) {
     setEditId(id);
     setEditOpen(true);
@@ -197,6 +215,7 @@ export default function ScreensPanel({ initialScreens }: Props) {
                 screen={s}
                 onRename={renameScreen}
                 onEdit={() => openEdit(s.id)}
+                onReset={() => resetPairing(s.id)}
               />
             ))}
           </ul>
@@ -221,10 +240,12 @@ function ScreenRowItem({
   screen,
   onRename,
   onEdit,
+  onReset,
 }: {
   screen: ScreenRow;
   onRename: (id: string, name: string) => Promise<void>;
   onEdit: () => void;
+  onReset: () => Promise<void>;
 }) {
   const [name, setName] = useState(screen.name);
   const [saving, setSaving] = useState(false);
@@ -240,9 +261,21 @@ function ScreenRowItem({
     setError(null);
     try {
       await onRename(screen.id, trimmed);
-    } catch (e: any) {
-      setError(e?.message ?? "Rename failed");
+    } catch (error: unknown) {
+      setError(error instanceof Error ? error.message : "Rename failed");
       setName(screen.name);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleReset() {
+    setSaving(true);
+    setError(null);
+    try {
+      await onReset();
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught.message : "Pairing reset failed");
     } finally {
       setSaving(false);
     }
@@ -256,12 +289,23 @@ function ScreenRowItem({
             <div className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">
               {label}
             </div>
-            <button
-              onClick={onEdit}
-              className="h-8 rounded-lg border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-900 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-black dark:text-zinc-50 dark:hover:bg-zinc-900"
-            >
-              Edit
-            </button>
+            <div className="flex items-center gap-2">
+              {screen.deviceId ? (
+                <button
+                  onClick={() => void handleReset()}
+                  disabled={saving}
+                  className="h-8 rounded-lg border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-600 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-black dark:text-zinc-300 dark:hover:bg-zinc-900"
+                >
+                  Reset pairing
+                </button>
+              ) : null}
+              <button
+                onClick={onEdit}
+                className="h-8 rounded-lg border border-zinc-200 bg-white px-3 text-xs font-medium text-zinc-900 hover:bg-zinc-50 dark:border-zinc-800 dark:bg-black dark:text-zinc-50 dark:hover:bg-zinc-900"
+              >
+                Edit
+              </button>
+            </div>
           </div>
 
           <div className="flex items-center gap-2">
@@ -298,8 +342,13 @@ function ScreenRowItem({
         {screen.width}×{screen.height}
       </div>
 
-      <div className="col-span-2 flex items-center text-sm text-zinc-700 dark:text-zinc-300">
-        {fmtDate(screen.lastSeenAt)}
+      <div className="col-span-2 flex flex-col justify-center text-sm text-zinc-700 dark:text-zinc-300">
+        <span>{fmtDate(screen.lastSeenAt)}</span>
+        <span className="text-xs text-zinc-500">
+          {screen._count?.logs
+            ? `${screen._count.logs} plays · ${screen.logs?.[0]?.asset.name ?? "latest recorded"}`
+            : "No proof of play yet"}
+        </span>
       </div>
 
       <div className="col-span-2 flex items-center justify-between gap-2">
@@ -402,8 +451,8 @@ function EditScreenModal({
         height: clampInt(height, 320, 7680),
         timezone: timezone.trim(),
       });
-    } catch (e: any) {
-      setError(e?.message ?? "Failed to save");
+    } catch (error: unknown) {
+      setError(error instanceof Error ? error.message : "Failed to save");
       setSaving(false);
       return;
     }

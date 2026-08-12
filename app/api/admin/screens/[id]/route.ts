@@ -23,7 +23,16 @@ export async function PATCH(req: Request, ctx: Ctx) {
     width?: number;
     height?: number;
     timezone?: string;
+    deviceId?: null;
+    deviceTokenHash?: null;
+    lastSeenAt?: null;
   } = {};
+
+  if (body.resetPairing === true) {
+    data.deviceId = null;
+    data.deviceTokenHash = null;
+    data.lastSeenAt = null;
+  }
 
   if (typeof body.name === "string") {
     const name = body.name.trim();

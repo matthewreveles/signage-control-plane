@@ -166,7 +166,6 @@ export default function ContentPanel({
     const existingNames = new Set(collections.map((c) => c.name.toLowerCase()));
     for (const w of wanted) {
       if (existingNames.has(w.name.toLowerCase())) continue;
-      // eslint-disable-next-line no-await-in-loop
       const created = await api<ContentCollection>("/api/admin/collections", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -607,8 +606,8 @@ function EditEntryModal({
         endAt: eIso,
         assetId: assetId || null,
       });
-    } catch (e: any) {
-      setError(e?.message ?? "Failed to save.");
+    } catch (error: unknown) {
+      setError(error instanceof Error ? error.message : "Failed to save.");
       setSaving(false);
       return;
     }

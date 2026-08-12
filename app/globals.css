@@ -2,6 +2,8 @@
 
 /* ---------- Design Tokens (simple, readable, Tailwind-friendly) ---------- */
 :root {
+  --font-sans: Inter, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --bg: 255 255 255;
   --fg: 12 12 14;
 
