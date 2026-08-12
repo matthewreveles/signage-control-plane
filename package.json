@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "prisma generate && next build",
+    "db:deploy": "prisma migrate deploy",
+    "db:status": "prisma migrate status",
     "typecheck": "prisma generate && tsc --noEmit",
     "lint": "eslint .",
     "smoke:screen-network": "node scripts/smoke-screen-network-poc.mjs",

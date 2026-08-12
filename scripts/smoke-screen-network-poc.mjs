@@ -9,6 +9,8 @@ const schema = read("prisma/schema.prisma");
 const playlist = read("app/api/v1/screens/[deviceId]/playlist/route.ts");
 const player = read("components/player/SignagePlayer.tsx");
 const campaignApi = read("app/api/admin/campaigns/route.ts");
+const readiness = read("lib/screen-network-readiness.ts");
+const health = read("app/api/v1/health/route.ts");
 
 const checks = [
   ["Factory package model", schema.includes("model CreativePackage")],
@@ -22,6 +24,8 @@ const checks = [
   ["Player heartbeat", player.includes("/heartbeat")],
   ["Proof-of-play queue", player.includes("gspan-proof-queue")],
   ["Player package telemetry", player.includes("presetKey")],
+  ["Schema readiness checkpoint", readiness.includes("SCREEN_NETWORK_MIGRATION")],
+  ["Runtime health endpoint", health.includes("getScreenNetworkReadiness")],
 ];
 
 let failed = 0;

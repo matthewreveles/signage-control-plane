@@ -40,10 +40,22 @@ npm run dev
 
 The application requires `DATABASE_URL` for a PostgreSQL database.
 
+## Deployment checkpoint
+
+The application does not run database migrations as an implicit side effect of a Vercel build. Apply reviewed migrations as an explicit release step using the direct Neon connection when available:
+
+```bash
+npm run db:status
+npm run db:deploy
+```
+
+`DATABASE_URL_UNPOOLED` is preferred for Prisma Migrate; `DATABASE_URL` remains the fallback. Verify `/api/v1/health` returns HTTP 200 and `"ready": true` before exercising creative-package import, player pairing or proof-of-play. If the migration has not been applied, database-dependent proof-of-concept pages render a deployment checkpoint instead of failing with an opaque HTTP 500.
+
 ## Verification
 
 ```bash
 npm run smoke:screen-network
+npm run db:status
 npm run typecheck
 npm run lint
 npm run build
