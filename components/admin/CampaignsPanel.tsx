@@ -206,31 +206,34 @@ export default function CampaignsPanel({
             <span className="text-xs text-zinc-500 dark:text-zinc-400">Content type</span>
             <div className="flex gap-2">
               <button
+                type="button"
                 onClick={() => setMode("PLAYLIST")}
-                className={`h-10 flex-1 rounded-xl border px-3 text-sm font-medium ${
+                className={`h-10 flex-1 rounded-xl border px-3 text-sm font-semibold transition-colors ${
                   mode === "PLAYLIST"
-                    ? "border-zinc-50 bg-zinc-50 text-zinc-900 dark:border-zinc-200 dark:bg-zinc-200"
-                    : "border-zinc-800 bg-black text-zinc-50 dark:border-zinc-800 dark:bg-black"
+                    ? "border-emerald-700 bg-emerald-700 text-white shadow-sm"
+                    : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-100"
                 }`}
               >
                 Playlist
               </button>
               <button
+                type="button"
                 onClick={() => setMode("PACKAGE")}
-                className={`h-10 flex-1 rounded-xl border px-3 text-sm font-medium ${
+                className={`h-10 flex-1 rounded-xl border px-3 text-sm font-semibold transition-colors ${
                   mode === "PACKAGE"
-                    ? "border-emerald-300 bg-emerald-100 text-emerald-950 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-100"
-                    : "border-zinc-800 bg-black text-zinc-50 dark:border-zinc-800 dark:bg-black"
+                    ? "border-emerald-700 bg-emerald-700 text-white shadow-sm"
+                    : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-100"
                 }`}
               >
                 Factory package
               </button>
               <button
+                type="button"
                 onClick={() => setMode("ASSET")}
-                className={`h-10 flex-1 rounded-xl border px-3 text-sm font-medium ${
+                className={`h-10 flex-1 rounded-xl border px-3 text-sm font-semibold transition-colors ${
                   mode === "ASSET"
-                    ? "border-zinc-50 bg-zinc-50 text-zinc-900 dark:border-zinc-200 dark:bg-zinc-200"
-                    : "border-zinc-800 bg-black text-zinc-50 dark:border-zinc-800 dark:bg-black"
+                    ? "border-emerald-700 bg-emerald-700 text-white shadow-sm"
+                    : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-100"
                 }`}
               >
                 Single asset
@@ -344,7 +347,7 @@ export default function CampaignsPanel({
           <button
             onClick={createCampaign}
             disabled={!canCreate || creating}
-            className="h-10 rounded-xl bg-zinc-900 px-4 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-50 dark:text-zinc-900"
+            className="h-10 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white transition-colors hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:text-zinc-500 disabled:opacity-100"
           >
             {creating ? "Creating…" : "Create campaign"}
           </button>
