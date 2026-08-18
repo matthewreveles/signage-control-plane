@@ -3,6 +3,7 @@ import Link from "next/link";
 const navigation = [
   { key: "screens", label: "Screens", href: "/" },
   { key: "packages", label: "Creative packages", href: "/packages" },
+  { key: "playlists", label: "Playlists", href: "/playlists" },
   { key: "campaigns", label: "Campaigns", href: "/campaigns" },
   { key: "content", label: "Content", href: "/content" },
 ] as const;
