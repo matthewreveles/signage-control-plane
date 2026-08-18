@@ -378,13 +378,20 @@ export default function CampaignsPanel({
                     {new Date(c.startAt).toLocaleString()} → {new Date(c.endAt).toLocaleString()}
                   </div>
                   <div className="col-span-2 flex items-center justify-end">
-                    <button
-                      onClick={() => publishCampaign(c.id)}
-                      disabled={publishingId === c.id}
-                      className="h-9 rounded-xl border border-zinc-200 bg-white px-3 text-sm font-medium hover:bg-zinc-50 dark:border-zinc-800 dark:bg-black dark:hover:bg-zinc-900"
-                    >
-                      {publishingId === c.id ? "Publishing…" : "Publish"}
-                    </button>
+                    {c.status === "DRAFT" ? (
+                      <button
+                        type="button"
+                        onClick={() => publishCampaign(c.id)}
+                        disabled={publishingId === c.id}
+                        className="h-9 rounded-xl border border-emerald-700 bg-emerald-700 px-3 text-sm font-semibold text-white hover:bg-emerald-800 disabled:bg-zinc-200 disabled:text-zinc-500"
+                      >
+                        {publishingId === c.id ? "Publishing…" : "Publish"}
+                      </button>
+                    ) : (
+                      <span className="rounded-lg bg-zinc-100 px-3 py-2 text-xs font-semibold text-zinc-600">
+                        {c.status === "PUBLISHED" ? "Published" : "Archived"}
+                      </span>
+                    )}
                   </div>
                 </li>
               ))}
