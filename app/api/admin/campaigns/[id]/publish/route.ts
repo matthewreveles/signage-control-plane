@@ -1,73 +1,241 @@
 import { NextResponse } from "next/server";
+
+import {
+  buildRecurringOccurrences,
+  type ScheduleOccurrence,
+} from "@/lib/campaign-schedule";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 
-type Ctx = { params: Promise<{ id: string }> };
+type Context = {
+  params: Promise<{ id: string }>;
+};
 
-export async function POST(_req: Request, ctx: Ctx) {
-  const { id: campaignId } = await ctx.params;
+export async function POST(
+  _request: Request,
+  context: Context,
+) {
+  const { id: campaignId } =
+    await context.params;
 
-  const campaign = await prisma.campaign.findUnique({
-    where: { id: campaignId },
-    include: {
-      targets: true,
-    },
-  });
+  const campaign =
+    await prisma.campaign.findUnique({
+      where: {
+        id: campaignId,
+      },
 
-  if (!campaign) return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+      include: {
+        targets: true,
+      },
+    });
 
-  // Expand targets -> screen IDs
-  const directScreenIds = campaign.targets
-    .filter((t) => t.type === "SCREEN" && t.screenId)
-    .map((t) => t.screenId!) as string[];
-
-  const groupIds = campaign.targets
-    .filter((t) => t.type === "GROUP" && t.groupId)
-    .map((t) => t.groupId!) as string[];
-
-  const groupMembers = groupIds.length
-    ? await prisma.screenGroupMember.findMany({
-        where: { groupId: { in: groupIds } },
-        select: { screenId: true },
-      })
-    : [];
-
-  const groupScreenIds = groupMembers.map((m) => m.screenId);
-
-  const screenIds = Array.from(new Set([...directScreenIds, ...groupScreenIds]));
-
-  if (screenIds.length === 0) {
-    return NextResponse.json({ error: "No target screens" }, { status: 400 });
+  if (!campaign) {
+    return NextResponse.json(
+      {
+        error: "Campaign not found",
+      },
+      { status: 404 },
+    );
   }
 
-  await prisma.$transaction(async (tx) => {
-    // Upsert one schedule per (campaignId, screenId)
-    for (const screenId of screenIds) {
-      await tx.scheduleWindow.upsert({
-        where: { campaignId_screenId: { campaignId, screenId } },
-        update: {
-          playlistId: campaign.playlistId,
-          priority: campaign.priority,
-          startAt: campaign.startAt,
-          endAt: campaign.endAt,
+  const directScreenIds =
+    campaign.targets
+      .filter(
+        (target) =>
+          target.type === "SCREEN" &&
+          target.screenId,
+      )
+      .map(
+        (target) =>
+          target.screenId!,
+      );
+
+  const groupIds =
+    campaign.targets
+      .filter(
+        (target) =>
+          target.type === "GROUP" &&
+          target.groupId,
+      )
+      .map(
+        (target) =>
+          target.groupId!,
+      );
+
+  const groupMembers =
+    groupIds.length > 0
+      ? await prisma.screenGroupMember.findMany(
+          {
+            where: {
+              groupId: {
+                in: groupIds,
+              },
+            },
+
+            select: {
+              screenId: true,
+            },
+          },
+        )
+      : [];
+
+  const screenIds = Array.from(
+    new Set([
+      ...directScreenIds,
+      ...groupMembers.map(
+        (member) =>
+          member.screenId,
+      ),
+    ]),
+  );
+
+  if (!screenIds.length) {
+    return NextResponse.json(
+      {
+        error:
+          "No target screens",
+      },
+      { status: 400 },
+    );
+  }
+
+  let occurrences:
+    ScheduleOccurrence[];
+
+  try {
+    if (
+      campaign.scheduleType ===
+      "RECURRING"
+    ) {
+      if (
+        !campaign.recurrenceStartDate ||
+        !campaign.recurrenceEndDate ||
+        !campaign.dailyStartTime ||
+        !campaign.dailyEndTime
+      ) {
+        throw new Error(
+          "Recurring campaign is missing schedule fields.",
+        );
+      }
+
+      occurrences =
+        buildRecurringOccurrences({
+          startDate:
+            campaign.recurrenceStartDate,
+
+          endDate:
+            campaign.recurrenceEndDate,
+
+          days:
+            campaign.recurrenceDays,
+
+          startTime:
+            campaign.dailyStartTime,
+
+          endTime:
+            campaign.dailyEndTime,
+
+          timeZone:
+            campaign.timezone,
+        });
+    } else {
+      occurrences = [
+        {
+          key: "one-time",
+          startAt:
+            campaign.startAt,
+          endAt:
+            campaign.endAt,
         },
-        create: {
-          campaignId,
-          screenId,
-          playlistId: campaign.playlistId,
-          priority: campaign.priority,
-          startAt: campaign.startAt,
-          endAt: campaign.endAt,
-        },
-      });
+      ];
     }
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Invalid campaign schedule",
+      },
+      { status: 400 },
+    );
+  }
 
-    await tx.campaign.update({
-      where: { id: campaignId },
-      data: { status: "PUBLISHED" },
-    });
+  const scheduleRows =
+    screenIds.flatMap(
+      (screenId) =>
+        occurrences.map(
+          (occurrence) => ({
+            campaignId,
+            screenId,
+
+            playlistId:
+              campaign.playlistId,
+
+            priority:
+              campaign.priority,
+
+            occurrenceKey:
+              occurrence.key,
+
+            startAt:
+              occurrence.startAt,
+
+            endAt:
+              occurrence.endAt,
+          }),
+        ),
+    );
+
+  await prisma.$transaction(
+    async (transaction) => {
+      /*
+       * Rebuild this campaign's materialized
+       * schedule so changed recurrence rules
+       * cannot leave stale occurrences behind.
+       */
+      await transaction.scheduleWindow.deleteMany(
+        {
+          where: {
+            campaignId,
+          },
+        },
+      );
+
+      await transaction.scheduleWindow.createMany(
+        {
+          data: scheduleRows,
+        },
+      );
+
+      await transaction.campaign.update(
+        {
+          where: {
+            id: campaignId,
+          },
+
+          data: {
+            status: "PUBLISHED",
+          },
+        },
+      );
+    },
+  );
+
+  return NextResponse.json({
+    ok: true,
+
+    scheduleType:
+      campaign.scheduleType,
+
+    publishedToScreens:
+      screenIds.length,
+
+    occurrences:
+      occurrences.length,
+
+    scheduleWindows:
+      scheduleRows.length,
   });
-
-  return NextResponse.json({ ok: true, publishedToScreens: screenIds.length });
 }

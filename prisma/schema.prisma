@@ -46,6 +46,11 @@ enum CampaignStatus {
   ARCHIVED
 }
 
+enum CampaignScheduleType {
+  ONE_TIME
+  RECURRING
+}
+
 enum CampaignTargetType {
   SCREEN
   GROUP
@@ -260,6 +265,13 @@ model Campaign {
   startAt  DateTime
   endAt    DateTime
 
+  scheduleType        CampaignScheduleType @default(ONE_TIME)
+  recurrenceDays      Int[]                @default([])
+  recurrenceStartDate String?
+  recurrenceEndDate   String?
+  dailyStartTime      String?
+  dailyEndTime        String?
+
   playlistId String
   playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Restrict)
 
@@ -309,9 +321,11 @@ model ScheduleWindow {
   startAt  DateTime
   endAt    DateTime
 
+  occurrenceKey String @default("one-time")
+
   createdAt DateTime @default(now())
 
-  @@unique([campaignId, screenId])
+  @@unique([campaignId, screenId, occurrenceKey])
   @@index([screenId, startAt, endAt])
   @@index([campaignId])
 }

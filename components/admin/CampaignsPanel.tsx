@@ -23,6 +23,12 @@ type Campaign = {
   priority: number;
   startAt: string;
   endAt: string;
+  scheduleType: "ONE_TIME" | "RECURRING";
+  recurrenceDays: number[];
+  recurrenceStartDate: string | null;
+  recurrenceEndDate: string | null;
+  dailyStartTime: string | null;
+  dailyEndTime: string | null;
   playlistId: string;
   playlist?: Playlist;
   targets: Array<{
@@ -37,6 +43,21 @@ function toLocalInputValue(d: Date) {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+
+function toDateInputValue(d: Date) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+const WEEKDAYS = [
+  { value: 0, short: "Sun", long: "Sunday" },
+  { value: 1, short: "Mon", long: "Monday" },
+  { value: 2, short: "Tue", long: "Tuesday" },
+  { value: 3, short: "Wed", long: "Wednesday" },
+  { value: 4, short: "Thu", long: "Thursday" },
+  { value: 5, short: "Fri", long: "Friday" },
+  { value: 6, short: "Sat", long: "Saturday" },
+] as const;
 
 export default function CampaignsPanel({
   initialCampaigns,
@@ -62,8 +83,38 @@ export default function CampaignsPanel({
   const [priority, setPriority] = useState(10);
 
   const now = new Date();
-  const [startAt, setStartAt] = useState(toLocalInputValue(now));
-  const [endAt, setEndAt] = useState(toLocalInputValue(new Date(now.getTime() + 60 * 60 * 1000)));
+  const recurringEndDefault = new Date(
+    now.getFullYear(),
+    now.getMonth() + 1,
+    0,
+  );
+
+  const [scheduleType, setScheduleType] =
+    useState<"ONE_TIME" | "RECURRING">("ONE_TIME");
+
+  const [startAt, setStartAt] =
+    useState(toLocalInputValue(now));
+
+  const [endAt, setEndAt] = useState(
+    toLocalInputValue(
+      new Date(now.getTime() + 60 * 60 * 1000),
+    ),
+  );
+
+  const [recurrenceDays, setRecurrenceDays] =
+    useState<number[]>([]);
+
+  const [recurrenceStartDate, setRecurrenceStartDate] =
+    useState(toDateInputValue(now));
+
+  const [recurrenceEndDate, setRecurrenceEndDate] =
+    useState(toDateInputValue(recurringEndDefault));
+
+  const [dailyStartTime, setDailyStartTime] =
+    useState("08:00");
+
+  const [dailyEndTime, setDailyEndTime] =
+    useState("23:00");
 
   const [mode, setMode] = useState<"PLAYLIST" | "PACKAGE" | "ASSET">(
     creativePackages.length ? "PACKAGE" : "PLAYLIST",
@@ -79,13 +130,39 @@ export default function CampaignsPanel({
 
   const canCreate = useMemo(() => {
     if (!name.trim()) return false;
-    if (!startAt || !endAt) return false;
+
+    if (scheduleType === "ONE_TIME") {
+      if (!startAt || !endAt) return false;
+    } else {
+      if (!recurrenceStartDate || !recurrenceEndDate) return false;
+      if (recurrenceEndDate < recurrenceStartDate) return false;
+      if (!dailyStartTime || !dailyEndTime) return false;
+      if (recurrenceDays.length === 0) return false;
+    }
+
     if (mode === "PLAYLIST" && !playlistId) return false;
     if (mode === "PACKAGE" && !creativePackageId) return false;
     if (mode === "ASSET" && !assetId) return false;
     if (screenIds.length === 0 && groupIds.length === 0) return false;
+
     return true;
-  }, [name, startAt, endAt, mode, playlistId, creativePackageId, assetId, screenIds, groupIds]);
+  }, [
+    name,
+    scheduleType,
+    startAt,
+    endAt,
+    recurrenceStartDate,
+    recurrenceEndDate,
+    dailyStartTime,
+    dailyEndTime,
+    recurrenceDays,
+    mode,
+    playlistId,
+    creativePackageId,
+    assetId,
+    screenIds,
+    groupIds,
+  ]);
 
   async function createCampaign() {
     if (!canCreate) return;
@@ -99,8 +176,21 @@ export default function CampaignsPanel({
           name: name.trim(),
           timezone,
           priority,
-          startAt: new Date(startAt).toISOString(),
-          endAt: new Date(endAt).toISOString(),
+          scheduleType,
+
+          ...(scheduleType === "ONE_TIME"
+            ? {
+                startAt: new Date(startAt).toISOString(),
+                endAt: new Date(endAt).toISOString(),
+              }
+            : {
+                recurrenceDays,
+                recurrenceStartDate,
+                recurrenceEndDate,
+                dailyStartTime,
+                dailyEndTime,
+              }),
+
           playlistId: mode === "PLAYLIST" ? playlistId : undefined,
           creativePackageId: mode === "PACKAGE" ? creativePackageId : undefined,
           assetId: mode === "ASSET" ? assetId : undefined,
@@ -141,6 +231,14 @@ export default function CampaignsPanel({
     else setter([...list, id]);
   }
 
+  function toggleRecurrenceDay(day: number) {
+    setRecurrenceDays((current) =>
+      current.includes(day)
+        ? current.filter((value) => value !== day)
+        : [...current, day].sort((a, b) => a - b),
+    );
+  }
+
   return (
     <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
       <div className="flex flex-col gap-6">
@@ -172,25 +270,163 @@ export default function CampaignsPanel({
             />
           </label>
 
-          <label className="grid gap-1">
-            <span className="text-xs text-zinc-500 dark:text-zinc-400">Start</span>
-            <input
-              type="datetime-local"
-              value={startAt}
-              onChange={(e) => setStartAt(e.target.value)}
-              className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm outline-none dark:border-zinc-800 dark:bg-black"
-            />
-          </label>
+          <div className="grid gap-2 sm:col-span-2">
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">
+              Schedule type
+            </span>
 
-          <label className="grid gap-1">
-            <span className="text-xs text-zinc-500 dark:text-zinc-400">End</span>
-            <input
-              type="datetime-local"
-              value={endAt}
-              onChange={(e) => setEndAt(e.target.value)}
-              className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm outline-none dark:border-zinc-800 dark:bg-black"
-            />
-          </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setScheduleType("ONE_TIME")}
+                className={`h-10 rounded-xl border px-3 text-sm font-semibold transition-colors ${
+                  scheduleType === "ONE_TIME"
+                    ? "border-emerald-700 bg-emerald-700 text-white"
+                    : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-100"
+                }`}
+              >
+                One time
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setScheduleType("RECURRING")}
+                className={`h-10 rounded-xl border px-3 text-sm font-semibold transition-colors ${
+                  scheduleType === "RECURRING"
+                    ? "border-emerald-700 bg-emerald-700 text-white"
+                    : "border-zinc-300 bg-white text-zinc-900 hover:bg-zinc-100"
+                }`}
+              >
+                Recurring
+              </button>
+            </div>
+          </div>
+
+          {scheduleType === "ONE_TIME" ? (
+            <>
+              <label className="grid gap-1">
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                  Start
+                </span>
+                <input
+                  type="datetime-local"
+                  value={startAt}
+                  onChange={(e) => setStartAt(e.target.value)}
+                  className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm outline-none dark:border-zinc-800 dark:bg-black"
+                />
+              </label>
+
+              <label className="grid gap-1">
+                <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                  End
+                </span>
+                <input
+                  type="datetime-local"
+                  value={endAt}
+                  onChange={(e) => setEndAt(e.target.value)}
+                  className="h-10 rounded-xl border border-zinc-200 bg-white px-3 text-sm outline-none dark:border-zinc-800 dark:bg-black"
+                />
+              </label>
+            </>
+          ) : (
+            <div className="grid gap-4 rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 sm:col-span-2">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="grid gap-1">
+                  <span className="text-xs text-zinc-500">
+                    Campaign start date
+                  </span>
+                  <input
+                    type="date"
+                    value={recurrenceStartDate}
+                    onChange={(e) =>
+                      setRecurrenceStartDate(e.target.value)
+                    }
+                    className="h-10 rounded-xl border border-zinc-300 bg-white px-3 text-sm outline-none"
+                  />
+                </label>
+
+                <label className="grid gap-1">
+                  <span className="text-xs text-zinc-500">
+                    Campaign end date
+                  </span>
+                  <input
+                    type="date"
+                    value={recurrenceEndDate}
+                    onChange={(e) =>
+                      setRecurrenceEndDate(e.target.value)
+                    }
+                    className="h-10 rounded-xl border border-zinc-300 bg-white px-3 text-sm outline-none"
+                  />
+                </label>
+              </div>
+
+              <div className="grid gap-2">
+                <span className="text-xs text-zinc-500">
+                  Repeat on
+                </span>
+
+                <div className="grid grid-cols-7 gap-1">
+                  {WEEKDAYS.map((day) => {
+                    const selected =
+                      recurrenceDays.includes(day.value);
+
+                    return (
+                      <button
+                        key={day.value}
+                        type="button"
+                        onClick={() =>
+                          toggleRecurrenceDay(day.value)
+                        }
+                        title={day.long}
+                        className={`h-10 rounded-lg border text-xs font-semibold transition-colors ${
+                          selected
+                            ? "border-emerald-700 bg-emerald-700 text-white"
+                            : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100"
+                        }`}
+                      >
+                        {day.short}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="grid gap-1">
+                  <span className="text-xs text-zinc-500">
+                    Daily start
+                  </span>
+                  <input
+                    type="time"
+                    value={dailyStartTime}
+                    onChange={(e) =>
+                      setDailyStartTime(e.target.value)
+                    }
+                    className="h-10 rounded-xl border border-zinc-300 bg-white px-3 text-sm outline-none"
+                  />
+                </label>
+
+                <label className="grid gap-1">
+                  <span className="text-xs text-zinc-500">
+                    Daily end
+                  </span>
+                  <input
+                    type="time"
+                    value={dailyEndTime}
+                    onChange={(e) =>
+                      setDailyEndTime(e.target.value)
+                    }
+                    className="h-10 rounded-xl border border-zinc-300 bg-white px-3 text-sm outline-none"
+                  />
+                </label>
+              </div>
+
+              <p className="text-xs text-zinc-500">
+                Times use the campaign timezone. An end time earlier
+                than the start time creates an overnight window.
+              </p>
+            </div>
+          )}
 
           <label className="grid gap-1">
             <span className="text-xs text-zinc-500 dark:text-zinc-400">Priority</span>
@@ -375,7 +611,27 @@ export default function CampaignsPanel({
                     {c.status}
                   </div>
                   <div className="col-span-4 flex items-center text-sm text-zinc-700 dark:text-zinc-300">
-                    {new Date(c.startAt).toLocaleString()} → {new Date(c.endAt).toLocaleString()}
+                    {c.scheduleType === "RECURRING" ? (
+                      <div className="grid gap-0.5">
+                        <span>
+                          {WEEKDAYS.filter((day) =>
+                            c.recurrenceDays.includes(day.value),
+                          )
+                            .map((day) => day.short)
+                            .join(", ")}
+                        </span>
+                        <span className="text-xs text-zinc-500">
+                          {c.recurrenceStartDate} → {c.recurrenceEndDate}
+                          {" · "}
+                          {c.dailyStartTime} → {c.dailyEndTime}
+                        </span>
+                      </div>
+                    ) : (
+                      <>
+                        {new Date(c.startAt).toLocaleString()} →{" "}
+                        {new Date(c.endAt).toLocaleString()}
+                      </>
+                    )}
                   </div>
                   <div className="col-span-2 flex items-center justify-end">
                     {c.status === "DRAFT" ? (
