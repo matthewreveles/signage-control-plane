@@ -10,6 +10,7 @@ type Context = { params: Promise<{ id: string }> };
 const tileSchema = z.object({
   memberId: z.string().trim().min(1),
   url: z.string().url(),
+  fallbackUrls: z.array(z.string().url()).max(3).default([]),
   width: z.number().int().min(1).max(16384),
   height: z.number().int().min(1).max(16384),
   codec: z.string().trim().max(80).optional().nullable(),
@@ -143,6 +144,14 @@ export async function POST(request: Request, context: Context) {
         { status: 400 },
       );
     }
+
+    const uniqueOrigins = new Set([tile.url, ...tile.fallbackUrls]);
+    if (uniqueOrigins.size !== tile.fallbackUrls.length + 1) {
+      return NextResponse.json(
+        { error: `Slot ${member.slotIndex + 1} contains duplicate media origins.` },
+        { status: 400 },
+      );
+    }
   }
 
   const creative = await prisma.$transaction(async (transaction) => {
@@ -165,6 +174,7 @@ export async function POST(request: Request, context: Context) {
       const member = memberMap.get(tile.memberId)!;
       const orientation = tile.width >= tile.height ? "LANDSCAPE" : "PORTRAIT";
       const role = manifest.mode === "SPAN" ? "wall tile" : "independent screen asset";
+      const origins = [tile.url, ...tile.fallbackUrls];
 
       const asset = await transaction.asset.create({
         data: {
@@ -175,14 +185,14 @@ export async function POST(request: Request, context: Context) {
           status: "READY",
           durationSec: manifest.type === "VIDEO" ? manifest.durationSec ?? null : null,
           renditions: {
-            create: {
-              url: tile.url,
+            create: origins.map((url) => ({
+              url,
               width: tile.width,
               height: tile.height,
               codec: tile.codec ?? null,
               bitrate: tile.bitrate ?? null,
               filesize: tile.filesize ?? null,
-            },
+            })),
           },
         },
       });
