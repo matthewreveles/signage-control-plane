@@ -173,17 +173,17 @@ model DisplayWall {
   name        String
   description String?
 
-  rows                    Int @default(1)
-  columns                 Int @default(1)
-  canvasWidth             Int @default(0)
-  canvasHeight            Int @default(0)
-  syncToleranceMs         Int @default(80)
-  hardResyncMs            Int @default(350)
-  preloadLeadSec          Int @default(120)
-  startGuardMs            Int @default(2000)
-  requireAllMembersReady  Boolean @default(true)
-  failurePolicy           DisplayWallFailurePolicy @default(HOLD_LAST_READY)
-  timezone                String @default("America/Phoenix")
+  rows                   Int                      @default(1)
+  columns                Int                      @default(1)
+  canvasWidth            Int                      @default(0)
+  canvasHeight           Int                      @default(0)
+  syncToleranceMs        Int                      @default(80)
+  hardResyncMs           Int                      @default(350)
+  preloadLeadSec         Int                      @default(300)
+  startGuardMs           Int                      @default(5000)
+  requireAllMembersReady Boolean                  @default(true)
+  failurePolicy          DisplayWallFailurePolicy @default(HOLD_LAST_READY)
+  timezone               String                   @default("America/Phoenix")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -249,7 +249,7 @@ model AssetRendition {
   id String @id @default(cuid())
 
   assetId String
-  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  asset   Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
   url      String
   width    Int
@@ -279,26 +279,22 @@ model PlaylistItem {
   playlistId String
   playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
 
-  // ASSET item
   assetId String?
-  asset   Asset?  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  asset   Asset? @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
-  // COLLECTION_WIDGET item
   collectionId String?
   collection   ContentCollection? @relation(fields: [collectionId], references: [id], onDelete: Cascade)
 
-  // CREATIVE_PACKAGE item
   creativePackageId String?
   creativePackage   CreativePackage? @relation(fields: [creativePackageId], references: [id], onDelete: Cascade)
 
-  // DISPLAY_WALL item. The linked scene may be SPAN or INDEPENDENT.
   displayWallCreativeId String?
   displayWallCreative   DisplayWallCreative? @relation(fields: [displayWallCreativeId], references: [id], onDelete: Cascade)
 
   kind       PlaylistItemKind  @default(ASSET)
   renderMode WidgetRenderMode?
 
-  sortOrder   Int  @default(0)
+  sortOrder   Int @default(0)
   durationSec Int?
 
   createdAt DateTime @default(now())
@@ -356,7 +352,7 @@ model DisplayWallCreative {
   name         String
   mode         DisplayWallSceneMode @default(SPAN)
   type         AssetType
-  status       AssetStatus @default(PROCESSING)
+  status       AssetStatus          @default(PROCESSING)
   masterUrl    String?
   masterWidth  Int?
   masterHeight Int?
@@ -384,7 +380,7 @@ model DisplayWallCreativeTile {
   member   DisplayWallMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
 
   assetId String @unique
-  asset   Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
 
@@ -431,7 +427,6 @@ model CampaignTarget {
   campaignId String
   campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
 
-  // Exactly one of these is set, depending on type
   screenId String?
   screen   Screen? @relation(fields: [screenId], references: [id], onDelete: Cascade)
 
@@ -490,12 +485,12 @@ model DisplayWallReadinessAck {
   screenId String
   screen   Screen @relation(fields: [screenId], references: [id], onDelete: Cascade)
 
-  occurrenceKey  String
+  occurrenceKey   String
   manifestVersion String
   status          DisplayWallReadinessStatus @default(PRELOADING)
   error           String?
   cachedAt        DateTime?
-  observedAt      DateTime @default(now())
+  observedAt      DateTime                   @default(now())
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -535,7 +530,7 @@ model ProofOfPlayLog {
   screen   Screen @relation(fields: [screenId], references: [id], onDelete: Cascade)
 
   assetId String
-  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  asset   Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
 
   startedAt   DateTime
   endedAt     DateTime
@@ -573,7 +568,7 @@ model ContentEntry {
   endAt   DateTime?
 
   assetId String?
-  asset   Asset?  @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  asset   Asset? @relation(fields: [assetId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
