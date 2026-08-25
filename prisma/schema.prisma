@@ -54,6 +54,7 @@ enum CampaignScheduleType {
 enum CampaignTargetType {
   SCREEN
   GROUP
+  WALL
 }
 
 /**
@@ -78,6 +79,7 @@ enum PlaylistItemKind {
   ASSET
   CREATIVE_PACKAGE
   COLLECTION_WIDGET
+  DISPLAY_WALL
 }
 
 enum WidgetRenderMode {
@@ -106,8 +108,9 @@ model Screen {
   schedules ScheduleWindow[]
   logs      ProofOfPlayLog[]
 
-  groupMembers    ScreenGroupMember[]
-  campaignTargets CampaignTarget[]
+  groupMembers       ScreenGroupMember[]
+  displayWallMembers DisplayWallMember[]
+  campaignTargets    CampaignTarget[]
 }
 
 model ScreenGroup {
@@ -137,6 +140,55 @@ model ScreenGroupMember {
   @@index([screenId])
 }
 
+model DisplayWall {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+
+  rows          Int @default(1)
+  columns       Int @default(1)
+  canvasWidth   Int @default(0)
+  canvasHeight  Int @default(0)
+  syncToleranceMs Int @default(80)
+  timezone      String @default("America/Phoenix")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members         DisplayWallMember[]
+  creatives       DisplayWallCreative[]
+  campaignTargets CampaignTarget[]
+  schedules       ScheduleWindow[]
+}
+
+model DisplayWallMember {
+  id String @id @default(cuid())
+
+  wallId String
+  wall   DisplayWall @relation(fields: [wallId], references: [id], onDelete: Cascade)
+
+  screenId String
+  screen   Screen @relation(fields: [screenId], references: [id], onDelete: Cascade)
+
+  slotIndex Int
+  row       Int
+  column    Int
+  x         Int
+  y         Int
+  width     Int
+  height    Int
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tiles DisplayWallCreativeTile[]
+
+  @@unique([wallId, screenId])
+  @@unique([wallId, row, column])
+  @@unique([wallId, slotIndex])
+  @@index([screenId])
+}
+
 model Asset {
   id          String      @id @default(cuid())
   name        String
@@ -155,6 +207,7 @@ model Asset {
 
   contentEntries   ContentEntry[]
   creativeVariants CreativeVariant[]
+  displayWallTiles DisplayWallCreativeTile[]
 }
 
 model AssetRendition {
@@ -203,6 +256,10 @@ model PlaylistItem {
   creativePackageId String?
   creativePackage   CreativePackage? @relation(fields: [creativePackageId], references: [id], onDelete: Cascade)
 
+  // DISPLAY_WALL item
+  displayWallCreativeId String?
+  displayWallCreative   DisplayWallCreative? @relation(fields: [displayWallCreativeId], references: [id], onDelete: Cascade)
+
   kind       PlaylistItemKind  @default(ASSET)
   renderMode WidgetRenderMode?
 
@@ -214,6 +271,7 @@ model PlaylistItem {
   @@index([playlistId, sortOrder])
   @@index([collectionId])
   @@index([creativePackageId])
+  @@index([displayWallCreativeId])
 }
 
 model CreativePackage {
@@ -252,6 +310,49 @@ model CreativeVariant {
 
   @@unique([packageId, destination, presetKey])
   @@index([destination, width, height])
+}
+
+model DisplayWallCreative {
+  id String @id @default(cuid())
+
+  wallId String
+  wall   DisplayWall @relation(fields: [wallId], references: [id], onDelete: Cascade)
+
+  name         String
+  type         AssetType
+  status       AssetStatus @default(PROCESSING)
+  masterUrl    String
+  masterWidth  Int
+  masterHeight Int
+  durationSec  Int?
+  sourceJobId  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tiles         DisplayWallCreativeTile[]
+  playlistItems PlaylistItem[]
+
+  @@index([wallId, status, createdAt])
+  @@index([sourceJobId])
+}
+
+model DisplayWallCreativeTile {
+  id String @id @default(cuid())
+
+  creativeId String
+  creative   DisplayWallCreative @relation(fields: [creativeId], references: [id], onDelete: Cascade)
+
+  memberId String
+  member   DisplayWallMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  assetId String @unique
+  asset   Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([creativeId, memberId])
+  @@index([memberId])
 }
 
 model Campaign {
@@ -298,11 +399,15 @@ model CampaignTarget {
   groupId String?
   group   ScreenGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
+  wallId String?
+  wall   DisplayWall? @relation(fields: [wallId], references: [id], onDelete: Cascade)
+
   createdAt DateTime @default(now())
 
   @@index([campaignId])
   @@index([screenId])
   @@index([groupId])
+  @@index([wallId])
 }
 
 model ScheduleWindow {
@@ -317,6 +422,9 @@ model ScheduleWindow {
   campaignId String?
   campaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
 
+  displayWallId String?
+  displayWall   DisplayWall? @relation(fields: [displayWallId], references: [id], onDelete: SetNull)
+
   priority Int      @default(10)
   startAt  DateTime
   endAt    DateTime
@@ -328,6 +436,7 @@ model ScheduleWindow {
   @@unique([campaignId, screenId, occurrenceKey])
   @@index([screenId, startAt, endAt])
   @@index([campaignId])
+  @@index([displayWallId])
 }
 
 model ProofOfPlayLog {
