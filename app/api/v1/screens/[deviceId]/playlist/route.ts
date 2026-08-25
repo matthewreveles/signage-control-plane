@@ -19,6 +19,14 @@ type ScheduleLike = {
   priority: number;
 };
 
+type PreloadAsset = {
+  assetId: string;
+  url: string;
+  type: "IMAGE" | "VIDEO";
+  sourceKind: "ASSET" | "CREATIVE_PACKAGE" | "DISPLAY_WALL";
+  sceneMode: "SPAN" | "INDEPENDENT" | null;
+};
+
 function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
@@ -203,7 +211,7 @@ export async function GET(req: Request, ctx: Ctx) {
             runKey(wall.id, schedule.campaign!.id, schedule.occurrenceKey),
           );
 
-          const assets = schedule.playlist.items.flatMap((playlistItem) => {
+          const assets = schedule.playlist.items.flatMap<PreloadAsset>((playlistItem) => {
             if (playlistItem.kind === "DISPLAY_WALL") {
               const creative = playlistItem.displayWallCreative;
               if (!creative || creative.status !== "READY" || creative.wallId !== wall.id) {
@@ -225,7 +233,7 @@ export async function GET(req: Request, ctx: Ctx) {
                   assetId: tile.asset.id,
                   url: rendition?.url ?? tile.asset.masterUrl,
                   type: tile.asset.type,
-                  sourceKind: "DISPLAY_WALL" as const,
+                  sourceKind: "DISPLAY_WALL",
                   sceneMode: creative.mode,
                 },
               ];
@@ -250,7 +258,7 @@ export async function GET(req: Request, ctx: Ctx) {
                       assetId: selected.asset.id,
                       url: selected.asset.masterUrl,
                       type: selected.asset.type,
-                      sourceKind: "CREATIVE_PACKAGE" as const,
+                      sourceKind: "CREATIVE_PACKAGE",
                       sceneMode: null,
                     },
                   ]
@@ -273,7 +281,7 @@ export async function GET(req: Request, ctx: Ctx) {
                   assetId: asset.id,
                   url: rendition?.url ?? asset.masterUrl,
                   type: asset.type,
-                  sourceKind: "ASSET" as const,
+                  sourceKind: "ASSET",
                   sceneMode: null,
                 },
               ];
