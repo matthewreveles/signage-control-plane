@@ -19,6 +19,7 @@ type AssetItem = {
   assetId: string;
   type: "IMAGE" | "VIDEO";
   url: string;
+  fallbackUrls?: string[];
   width: number | null;
   height: number | null;
   durationSeconds: number;
@@ -88,6 +89,7 @@ type WallPreloadPlan = {
   assets: Array<{
     assetId: string;
     url: string;
+    fallbackUrls: string[];
     type: "IMAGE" | "VIDEO";
     sourceKind: "ASSET" | "CREATIVE_PACKAGE" | "DISPLAY_WALL";
     sceneMode: "SPAN" | "INDEPENDENT" | null;
@@ -165,6 +167,10 @@ function sleep(ms: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 }
 
+function mediaCandidates(asset: { url: string; fallbackUrls?: string[] }) {
+  return Array.from(new Set([asset.url, ...(asset.fallbackUrls ?? [])]));
+}
+
 async function consumeResponse(response: Response) {
   if (!response.body) {
     await response.arrayBuffer();
@@ -198,8 +204,10 @@ async function verifyVideo(url: string) {
   await new Promise<void>((resolve, reject) => {
     const video = document.createElement("video");
     let settled = false;
+    let timeout: number | undefined;
 
     const cleanup = () => {
+      if (timeout !== undefined) window.clearTimeout(timeout);
       video.removeAttribute("src");
       video.load();
     };
@@ -226,12 +234,15 @@ async function verifyVideo(url: string) {
     video.src = url;
     video.load();
 
-    window.setTimeout(fail, 20_000);
+    timeout = window.setTimeout(fail, 20_000);
   });
 }
 
-async function preloadAsset(asset: WallPreloadPlan["assets"][number]) {
-  const response = await fetch(asset.url, { cache: "force-cache" });
+async function verifyAssetUrl(
+  asset: WallPreloadPlan["assets"][number],
+  url: string,
+) {
+  const response = await fetch(url, { cache: "force-cache" });
   if (!response.ok && response.type !== "opaque") {
     throw new Error(`Asset preload returned HTTP ${response.status}`);
   }
@@ -239,10 +250,27 @@ async function preloadAsset(asset: WallPreloadPlan["assets"][number]) {
   await consumeResponse(response);
 
   if (asset.type === "VIDEO") {
-    await verifyVideo(asset.url);
+    await verifyVideo(url);
   } else {
-    await verifyImage(asset.url);
+    await verifyImage(url);
   }
+}
+
+async function preloadAsset(asset: WallPreloadPlan["assets"][number]) {
+  let lastError: unknown = null;
+
+  for (const url of mediaCandidates(asset)) {
+    try {
+      await verifyAssetUrl(asset, url);
+      return url;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("All media origins failed preload verification");
 }
 
 async function reportWallReadiness({
@@ -287,12 +315,14 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [clockOffsetMs, setClockOffsetMs] = useState(0);
   const [lastReadyAsset, setLastReadyAsset] = useState<AssetItem | null>(null);
+  const [mediaUrlOverride, setMediaUrlOverride] = useState<string | null>(null);
   const [connection, setConnection] = useState<
     "CONNECTING" | "ONLINE" | "OFFLINE" | "UNPAIRED"
   >("CONNECTING");
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const clockSamplesRef = useRef<ClockSample[]>([]);
   const preloadVersionRef = useRef<string | null>(null);
+  const preloadedUrlRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     const stored = window.localStorage.getItem(`gspan-screen-token:${deviceId}`);
@@ -362,14 +392,15 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
     };
   }, [deviceId, token]);
 
-  useEffect(() => {
-    if (!token || !playlist?.preload) return;
+  const preloadVersion = playlist?.preload?.manifestVersion ?? null;
 
-    const preload = playlist.preload;
-    if (preloadVersionRef.current === preload.manifestVersion) return;
+  useEffect(() => {
+    const preload = playlist?.preload;
+    if (!token || !preload || !preloadVersion) return;
+    if (preloadVersionRef.current === preloadVersion) return;
 
     let cancelled = false;
-    preloadVersionRef.current = preload.manifestVersion;
+    preloadVersionRef.current = preloadVersion;
 
     async function arm() {
       let retry = 0;
@@ -384,12 +415,13 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
           });
 
           const uniqueAssets = Array.from(
-            new Map(preload.assets.map((asset) => [asset.url, asset])).values(),
+            new Map(preload.assets.map((asset) => [asset.assetId, asset])).values(),
           );
 
           for (const asset of uniqueAssets) {
             if (cancelled) return;
-            await preloadAsset(asset);
+            const resolvedUrl = await preloadAsset(asset);
+            preloadedUrlRef.current.set(asset.assetId, resolvedUrl);
           }
 
           if (cancelled) return;
@@ -421,11 +453,8 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
     void arm();
     return () => {
       cancelled = true;
-      if (preloadVersionRef.current === preload.manifestVersion) {
-        preloadVersionRef.current = null;
-      }
     };
-  }, [deviceId, playlist?.preload, token]);
+  }, [deviceId, preloadVersion, token]);
 
   useEffect(() => {
     if (!token) return;
@@ -448,8 +477,6 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
     return () => window.clearInterval(interval);
   }, [deviceId, token]);
 
-  // A display wall follows the shared absolute clock instead of allowing each
-  // browser to advance its own timeline independently.
   useEffect(() => {
     if (!playlist?.sync || !playlist.items.length) return;
 
@@ -513,13 +540,9 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
   const currentKey = itemKey(currentItem, currentIndex);
 
   useEffect(() => {
-    if (currentItem?.kind === "ASSET") {
-      setLastReadyAsset(currentItem);
-    }
-  }, [currentKey, currentItem]);
+    setMediaUrlOverride(null);
+  }, [currentKey]);
 
-  // Ordinary single-screen playback remains deliberately independent. Wall
-  // playback never uses this local timer; the shared epoch chooses every item.
   useEffect(() => {
     if (!currentItem || !token || playlist?.sync) return;
     const startedAt = new Date();
@@ -557,8 +580,6 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentKey, deviceId, token, Boolean(playlist?.sync)]);
 
-  // In wall mode a player may join halfway through a scene. Record the actual
-  // interval this viewport rendered instead of claiming a full scheduled play.
   useEffect(() => {
     if (!playlist?.sync || currentItem?.kind !== "ASSET" || !token) return;
 
@@ -620,6 +641,17 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
     }
   }
 
+  function nextMediaOrigin(asset: AssetItem, currentUrl: string) {
+    const candidates = mediaCandidates(asset);
+    const candidateIndex = candidates.indexOf(currentUrl);
+    const next =
+      candidates[candidateIndex + 1] ?? candidates.find((url) => url !== currentUrl);
+    if (next) {
+      preloadedUrlRef.current.set(asset.assetId, next);
+      setMediaUrlOverride(next);
+    }
+  }
+
   if (connection === "UNPAIRED") {
     return (
       <PlayerMessage
@@ -649,8 +681,7 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
   }
 
   const heldAsset =
-    !currentItem &&
-    playlist?.preload?.failurePolicy === "HOLD_LAST_READY"
+    !currentItem && playlist?.preload?.failurePolicy === "HOLD_LAST_READY"
       ? lastReadyAsset
       : currentItem?.kind === "SYNC_GAP" &&
           playlist?.sync?.failurePolicy === "HOLD_LAST_READY"
@@ -680,9 +711,15 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
   }
 
   const renderItem = heldAsset ?? currentItem!;
+  const resolvedMediaUrl =
+    renderItem.kind === "ASSET"
+      ? mediaUrlOverride ??
+        preloadedUrlRef.current.get(renderItem.assetId) ??
+        renderItem.url
+      : null;
   const renderKey =
-    heldAsset && renderItem.kind === "ASSET"
-      ? `held:${renderItem.assetId}:${renderItem.url}`
+    renderItem.kind === "ASSET"
+      ? `${heldAsset ? "held:" : ""}${currentKey}:${resolvedMediaUrl}`
       : currentKey;
 
   return (
@@ -694,24 +731,28 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
           <video
             ref={videoRef}
             key={renderKey}
-            src={renderItem.url}
+            src={resolvedMediaUrl ?? renderItem.url}
             autoPlay
             muted
             playsInline
             preload="auto"
             loop={Boolean(playlist.sync)}
             onLoadedMetadata={(event) => seekLoadedWallVideo(event.currentTarget)}
+            onCanPlay={() => setLastReadyAsset(renderItem)}
+            onError={() => nextMediaOrigin(renderItem, resolvedMediaUrl ?? renderItem.url)}
             className="h-full w-full object-cover"
           />
         ) : (
           <Image
             key={renderKey}
-            src={renderItem.url}
+            src={resolvedMediaUrl ?? renderItem.url}
             alt=""
             fill
             unoptimized
             priority
             sizes="100vw"
+            onLoad={() => setLastReadyAsset(renderItem)}
+            onError={() => nextMediaOrigin(renderItem, resolvedMediaUrl ?? renderItem.url)}
             className="object-cover"
           />
         )
