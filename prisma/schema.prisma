@@ -84,6 +84,18 @@ enum DisplayWallRunStatus {
   COMPLETE
 }
 
+enum DisplayWallCorrectionMode {
+  NONE
+  SOFT
+  HARD
+}
+
+enum DisplayWallPlaybackTransport {
+  LOCAL_FILE
+  BROWSER_CACHE
+  NETWORK
+}
+
 /**
  * --- Structured vendor input ---
  */
@@ -139,6 +151,7 @@ model Screen {
   displayWallMembers   DisplayWallMember[]
   campaignTargets      CampaignTarget[]
   displayWallReadiness DisplayWallReadinessAck[]
+  displayWallTelemetry DisplayWallTelemetry[]
 }
 
 model ScreenGroup {
@@ -194,6 +207,7 @@ model DisplayWall {
   schedules       ScheduleWindow[]
   readinessAcks   DisplayWallReadinessAck[]
   runs            DisplayWallRun[]
+  telemetry       DisplayWallTelemetry[]
 }
 
 model DisplayWallMember {
@@ -243,6 +257,7 @@ model Asset {
   contentEntries   ContentEntry[]
   creativeVariants CreativeVariant[]
   displayWallTiles DisplayWallCreativeTile[]
+  wallTelemetry    DisplayWallTelemetry[]
 }
 
 model AssetRendition {
@@ -416,6 +431,7 @@ model Campaign {
   schedules         ScheduleWindow[]
   wallReadinessAcks DisplayWallReadinessAck[]
   wallRuns          DisplayWallRun[]
+  wallTelemetry     DisplayWallTelemetry[]
 
   @@index([status, startAt, endAt])
 }
@@ -520,6 +536,52 @@ model DisplayWallRun {
 
   @@unique([wallId, campaignId, occurrenceKey])
   @@index([wallId, status, releaseAt])
+}
+
+model DisplayWallTelemetry {
+  id String @id @default(cuid())
+
+  wallId String
+  wall   DisplayWall @relation(fields: [wallId], references: [id], onDelete: Cascade)
+
+  screenId String
+  screen   Screen @relation(fields: [screenId], references: [id], onDelete: Cascade)
+
+  campaignId String?
+  campaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  occurrenceKey   String?
+  manifestVersion String?
+  sceneMode       DisplayWallSceneMode?
+
+  currentAssetId String?
+  currentAsset   Asset? @relation(fields: [currentAssetId], references: [id], onDelete: SetNull)
+  currentItemIndex Int?
+
+  driftMs        Int?
+  clockOffsetMs  Int?
+  correctionMode DisplayWallCorrectionMode @default(NONE)
+  transport      DisplayWallPlaybackTransport @default(NETWORK)
+
+  cacheReady    Boolean @default(false)
+  cachedAssets  Int     @default(0)
+  cacheBytesMb  Int     @default(0)
+  storageFreeMb Int?
+
+  sourceFailovers Int @default(0)
+  hardResyncs     Int @default(0)
+
+  playerVersion String?
+  lastError     String?
+  observedAt    DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([wallId, screenId])
+  @@index([wallId, observedAt])
+  @@index([screenId, observedAt])
+  @@index([campaignId, occurrenceKey])
 }
 
 model ProofOfPlayLog {
