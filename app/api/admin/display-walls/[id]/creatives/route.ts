@@ -19,10 +19,11 @@ const tileSchema = z.object({
 
 const creativeManifestSchema = z.object({
   name: z.string().trim().min(1).max(220),
+  mode: z.enum(["SPAN", "INDEPENDENT"]).default("SPAN"),
   type: z.enum(["IMAGE", "VIDEO"]),
-  masterUrl: z.string().url(),
-  masterWidth: z.number().int().min(1).max(262144),
-  masterHeight: z.number().int().min(1).max(32768),
+  masterUrl: z.string().url().optional().nullable(),
+  masterWidth: z.number().int().min(1).max(262144).optional().nullable(),
+  masterHeight: z.number().int().min(1).max(32768).optional().nullable(),
   durationSec: z.number().int().min(1).max(3600).optional().nullable(),
   sourceJobId: z.string().trim().max(180).optional().nullable(),
   tiles: z.array(tileSchema).min(1).max(200),
@@ -56,7 +57,7 @@ export async function POST(request: Request, context: Context) {
 
   if (!parsed.success) {
     return NextResponse.json(
-      { error: "Invalid wall creative manifest", issues: parsed.error.issues },
+      { error: "Invalid wall scene manifest", issues: parsed.error.issues },
       { status: 400 },
     );
   }
@@ -72,7 +73,7 @@ export async function POST(request: Request, context: Context) {
 
   if (!wall.members.length || wall.canvasWidth <= 0 || wall.canvasHeight <= 0) {
     return NextResponse.json(
-      { error: "Configure the display-wall topology before importing shared creative." },
+      { error: "Configure the display-wall topology before importing a wall scene." },
       { status: 400 },
     );
   }
@@ -81,18 +82,29 @@ export async function POST(request: Request, context: Context) {
 
   if (manifest.type === "VIDEO" && !manifest.durationSec) {
     return NextResponse.json(
-      { error: "Video wall creative requires durationSec." },
+      { error: "Video wall scenes require durationSec." },
       { status: 400 },
     );
   }
 
   if (
-    manifest.masterWidth !== wall.canvasWidth ||
-    manifest.masterHeight !== wall.canvasHeight
+    (manifest.masterWidth === null) !== (manifest.masterHeight === null) ||
+    (manifest.masterWidth === undefined) !== (manifest.masterHeight === undefined)
+  ) {
+    return NextResponse.json(
+      { error: "masterWidth and masterHeight must be supplied together." },
+      { status: 400 },
+    );
+  }
+
+  if (
+    manifest.masterWidth !== null &&
+    manifest.masterWidth !== undefined &&
+    (manifest.masterWidth !== wall.canvasWidth || manifest.masterHeight !== wall.canvasHeight)
   ) {
     return NextResponse.json(
       {
-        error: `Master canvas must be exactly ${wall.canvasWidth}×${wall.canvasHeight} for this wall.`,
+        error: `Logical master geometry must be exactly ${wall.canvasWidth}×${wall.canvasHeight} for this wall.`,
       },
       { status: 400 },
     );
@@ -106,7 +118,10 @@ export async function POST(request: Request, context: Context) {
     tileMemberIds.size !== wall.members.length
   ) {
     return NextResponse.json(
-      { error: "A wall creative must contain exactly one tile for every configured wall member." },
+      {
+        error:
+          "A wall scene must contain exactly one rendered or assigned asset for every configured wall member.",
+      },
       { status: 400 },
     );
   }
@@ -115,7 +130,7 @@ export async function POST(request: Request, context: Context) {
     const member = memberMap.get(tile.memberId);
     if (!member) {
       return NextResponse.json(
-        { error: "The creative manifest references a member that is not part of this wall." },
+        { error: "The scene manifest references a member that is not part of this wall." },
         { status: 400 },
       );
     }
@@ -123,7 +138,7 @@ export async function POST(request: Request, context: Context) {
     if (tile.width !== member.width || tile.height !== member.height) {
       return NextResponse.json(
         {
-          error: `Tile for slot ${member.slotIndex + 1} must be ${member.width}×${member.height}.`,
+          error: `Asset for slot ${member.slotIndex + 1} must be ${member.width}×${member.height}.`,
         },
         { status: 400 },
       );
@@ -135,11 +150,12 @@ export async function POST(request: Request, context: Context) {
       data: {
         wallId: wall.id,
         name: manifest.name,
+        mode: manifest.mode,
         type: manifest.type,
         status: "PROCESSING",
-        masterUrl: manifest.masterUrl,
-        masterWidth: manifest.masterWidth,
-        masterHeight: manifest.masterHeight,
+        masterUrl: manifest.masterUrl ?? null,
+        masterWidth: manifest.masterWidth ?? null,
+        masterHeight: manifest.masterHeight ?? null,
         durationSec: manifest.durationSec ?? null,
         sourceJobId: manifest.sourceJobId ?? null,
       },
@@ -147,12 +163,12 @@ export async function POST(request: Request, context: Context) {
 
     for (const tile of manifest.tiles) {
       const member = memberMap.get(tile.memberId)!;
-      const orientation =
-        tile.width >= tile.height ? "LANDSCAPE" : "PORTRAIT";
+      const orientation = tile.width >= tile.height ? "LANDSCAPE" : "PORTRAIT";
+      const role = manifest.mode === "SPAN" ? "wall tile" : "independent screen asset";
 
       const asset = await transaction.asset.create({
         data: {
-          name: `${manifest.name} · wall tile ${member.slotIndex + 1}`,
+          name: `${manifest.name} · ${role} ${member.slotIndex + 1}`,
           type: manifest.type,
           orientation,
           masterUrl: tile.url,
