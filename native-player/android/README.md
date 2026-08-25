@@ -8,25 +8,28 @@ They are intended to be copied into the existing local player project at:
 ~/AndroidStudioProjects/GSPANPlayer/app/src/main/java/com/gspan/player/
 ```
 
-The control plane remains in `signage-control-plane`; the native player owns persistent media storage and actual local-file playback.
+The control plane remains in `signage-control-plane`; the native player owns persistent media, the last committed wall timeline and actual local-file playback.
 
 ## Production invariant
 
-A wall run is not considered latency-insulated merely because the device downloaded the media once or the WebView/browser reports a cache hit.
+A wall run is not considered latency-insulated merely because a device downloaded media once or a browser reports a cache hit.
 
 For G-SPAN production wall playback:
 
 1. The player receives the upcoming `preload` manifest from `/api/v1/screens/:deviceId/playlist`.
-2. `PersistentMediaCache.prepareManifest()` downloads every required asset into app-private persistent storage.
-3. Downloads are written as `.part` files, flushed and `fsync()`'d, then atomically renamed into place.
-4. The manifest gets a `READY.json` sentinel only after every required asset succeeds.
-5. The player POSTs `READY` to `/wall-readiness` only after the sentinel exists.
-6. The control plane waits for the cluster readiness barrier and supplies a shared `releaseAt`.
-7. When the wall run starts, playback resolves `assetId` through `PersistentMediaCache.localUri()`.
-8. An armed wall must not fall back to the network URL for a missing local asset. Apply the configured wall failure policy instead (`HOLD_LAST_READY` by default).
-9. The native player reports `transport = LOCAL_FILE` only while the active media URI is actually local.
+2. That manifest contains the exact screen-specific timeline, scheduled start/end epochs and, once armed, the shared `releaseEpochMs`.
+3. `PersistentWallSchedule.persist()` stores that control data atomically in app-private storage on every meaningful preload update.
+4. `PersistentMediaCache.prepareManifest()` downloads every required asset into app-private persistent storage.
+5. Downloads are written as `.part` files, flushed and `fsync()`'d, then atomically renamed into place.
+6. The media manifest gets a `READY.json` sentinel only after every required asset succeeds.
+7. The player POSTs `READY` to `/wall-readiness` only after the sentinel exists.
+8. The control plane waits for the cluster readiness barrier and supplies a shared future release epoch.
+9. Subsequent preload polling persists the `ARMED`/`RUNNING` state and `releaseEpochMs` locally.
+10. When the run starts, playback resolves `assetId` through `PersistentMediaCache.localUri()` and timeline position through `PersistentWallSchedule.offlinePosition()`.
+11. An armed wall must not silently fall back to a network URL for a missing local asset. Apply the configured wall failure policy instead (`HOLD_LAST_READY` by default).
+12. The native player reports `transport = LOCAL_FILE` only while the active media URI is actually local.
 
-Once step 7 is true, WAN/CDN latency is outside the active playback path.
+Once the timeline and media are both persisted, WAN/CDN latency is outside the active playback and sequence path for that already-armed run.
 
 ## Files
 
@@ -42,10 +45,22 @@ Once step 7 is true, WAN/CDN latency is outside the active playback path.
 - local `Uri` resolution;
 - purge helper for old manifests.
 
+### `PersistentWallSchedule.kt`
+
+- stores wall/campaign/occurrence/manifest identity;
+- stores scheduled start/end and shared release epochs;
+- stores the exact screen-specific sequence and durations;
+- stores SPAN/INDEPENDENT scene identity for each asset item;
+- stores last known server clock offset;
+- atomic `.part` + `fsync()` persistence;
+- keeps an active-run pointer;
+- calculates the correct current item and in-item offset from the shared epoch after process restart or API loss;
+- refuses offline execution unless the stored run was observed as `ARMED` or `RUNNING`, the release epoch exists, the run has not expired and the matching media manifest is READY.
+
 ### `WallControlPlaneClient.kt`
 
 - authenticated playlist fetch;
-- parses the preload plan;
+- parses the preload plan and persistent timeline;
 - PRELOADING / READY / FAILED acknowledgements;
 - prepares the complete manifest before READY;
 - posts wall telemetry snapshots.
@@ -60,18 +75,20 @@ Once step 7 is true, WAN/CDN latency is outside the active playback path.
 
 ## MainActivity integration shape
 
-Do not move all logic into `MainActivity`. Keep MainActivity responsible for lifecycle and presentation, while these helpers own durable cache and telemetry state.
+Do not move all logic into `MainActivity`. Keep MainActivity responsible for lifecycle and presentation, while these helpers own durable cache, timeline and telemetry state.
 
 Representative wiring:
 
 ```kotlin
 private lateinit var wallCache: PersistentMediaCache
+private lateinit var wallSchedule: PersistentWallSchedule
 private lateinit var wallClient: WallControlPlaneClient
 private lateinit var wallMonitor: WallRuntimeMonitor
 private val wallIo = Executors.newSingleThreadExecutor()
 
 private fun initializeWallRuntime(deviceId: String, token: String) {
     wallCache = PersistentMediaCache(applicationContext)
+    wallSchedule = PersistentWallSchedule(applicationContext)
     wallClient = WallControlPlaneClient(
         baseUrl = "https://<screen-network-host>",
         deviceId = deviceId,
@@ -93,13 +110,25 @@ wallIo.execute {
     val playlist = wallClient.fetchPlaylist()
     val preload = wallClient.parsePreloadPlan(playlist)
 
-    if (preload != null && !wallCache.manifestReady(preload.manifestVersion)) {
-        val result = wallClient.prepareAndAcknowledge(preload, wallCache)
-        wallMonitor.onManifestPrepared(preload, result)
+    if (preload != null) {
+        // Persist every state transition, including releaseEpochMs once the run arms.
+        wallSchedule.persist(preload)
+
+        if (!wallCache.manifestReady(preload.manifestVersion)) {
+            val result = wallClient.prepareAndAcknowledge(preload, wallCache)
+            wallMonitor.onManifestPrepared(preload, result)
+        }
     }
 
     // Existing playlist/render scheduling continues here.
 }
+```
+
+Whenever a better server-clock estimate is calculated:
+
+```kotlin
+wallMonitor.onClockSample(clockOffsetMs)
+wallSchedule.updateClockOffset(manifestVersion, clockOffsetMs.toLong())
 ```
 
 When an armed wall asset is selected:
@@ -129,7 +158,6 @@ wallMonitor.onScene(
 During the existing shared-clock correction loop:
 
 ```kotlin
-wallMonitor.onClockSample(clockOffsetMs)
 wallMonitor.onDrift(driftMs, correctionMode)
 
 if (correctionMode == "HARD") {
@@ -137,36 +165,68 @@ if (correctionMode == "HARD") {
 }
 ```
 
-On teardown:
+## Offline / restart continuation
+
+At startup or after an API failure:
 
 ```kotlin
-override fun onDestroy() {
-    wallMonitor.close()
-    wallIo.shutdownNow()
-    super.onDestroy()
+val stored = wallSchedule.loadActive()
+
+if (stored != null && stored.canRunOffline(System.currentTimeMillis(), wallCache)) {
+    val position = wallSchedule.offlinePosition(stored)
+
+    if (position != null) {
+        val item = position.item
+
+        if (item.kind == "ASSET" && item.assetId != null) {
+            val localUri = wallCache.localUri(stored.plan.manifestVersion, item.assetId)
+            // Render localUri and seek video to position.offsetMs when applicable.
+        }
+    }
 }
 ```
+
+This path is intentionally fail-closed. A PREPARING/BLOCKED run, an unknown release epoch, an expired schedule or an incomplete cache does not get guessed into playback.
+
+For a running/armed persisted wall, the sequence calculation is:
+
+```text
+serverNow ≈ localSystemTime + lastKnownClockOffset
+elapsed = serverNow - releaseEpoch
+phase = elapsed mod timelineDuration
+```
+
+The player therefore rejoins the same shared phase instead of restarting item 1.
 
 ## Cache retention
 
 Keep at least:
 
-- the currently armed/running manifest;
-- the next successfully prepared manifest.
+- the currently armed/running manifest and timeline;
+- the next successfully prepared manifest and timeline.
 
-After the next manifest is READY, older versions can be removed with `purgeExcept()`.
+After the next manifest is READY, older versions can be removed with `purgeExcept()` on both persistence helpers.
 
-Do not delete the active manifest during a wall run, even if the control plane becomes unreachable.
+Do not delete the active manifest or timeline during a wall run, even if the control plane becomes unreachable.
 
-## Reboot / outage behavior
+## Browser reference vs. native production
 
-App-private `filesDir` content survives process death and device reboot. It does not survive app uninstall/data clearing.
+The existing browser player now reports `BROWSER_CACHE` telemetry and actual drift/correction/failover information to the same wall operations dashboard. This makes it useful for POC testing and for comparing players.
 
-At app launch:
+Only the native player should report `LOCAL_FILE`, and only when it is actually rendering from persistent app-private storage.
 
-1. inspect the most recent stored manifest(s);
-2. reconnect to the control plane when possible;
-3. if the control plane is unreachable but a still-valid armed schedule has been persisted locally, continue its known timeline using local media;
-4. queue proof-of-play / telemetry for later delivery rather than interrupting playback.
+That distinction is deliberate:
 
-Persisting the schedule/epoch itself is the next native hardening step after the media-cache integration. The current control plane already uses an absolute shared epoch, so the native player does not need a different campaign model to support that offline continuation.
+```text
+NETWORK       = media depends on live WAN/CDN delivery
+BROWSER_CACHE = browser has preloaded/decoded media, but browser owns cache persistence
+LOCAL_FILE    = G-SPAN owns a verified persistent file and active playback uses that file
+```
+
+The Display Walls operations view treats `LOCAL_FILE` as the production-safe latency-isolated state.
+
+## Availability boundary
+
+No distributed system can truthfully guarantee that hardware, power, LAN and storage can never fail. G-SPAN's safety rule is therefore stronger and more useful than claiming zero failures: **a device never advances an uncertain wall state.**
+
+Once a run is locally persisted as ARMED/RUNNING, WAN/CDN loss does not remove its media or timeline. Before that point, failures keep the wall in the previous safe state rather than allowing a partially prepared cluster to launch.
