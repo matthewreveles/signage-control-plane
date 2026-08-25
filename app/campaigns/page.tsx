@@ -67,6 +67,14 @@ export default async function CampaignsPage() {
     }),
   ]);
 
+  const campaignWallCreatives = serialize(wallCreatives).map((creative) => ({
+    ...creative,
+    // UI geometry describes the logical cluster canvas. A physical encoded
+    // monolithic master is optional and may not exist for very wide walls.
+    masterWidth: creative.masterWidth ?? creative.wall.canvasWidth,
+    masterHeight: creative.masterHeight ?? creative.wall.canvasHeight,
+  }));
+
   return (
     <AdminShell
       active="campaigns"
@@ -81,7 +89,7 @@ export default async function CampaignsPage() {
         screens={serialize(screens)}
         groups={serialize(groups)}
         walls={serialize(walls)}
-        wallCreatives={serialize(wallCreatives)}
+        wallCreatives={campaignWallCreatives}
       />
     </AdminShell>
   );
