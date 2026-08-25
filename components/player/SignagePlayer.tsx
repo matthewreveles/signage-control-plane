@@ -600,15 +600,16 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
   useEffect(() => {
     const sync = playlist?.sync;
     if (!sync || !token) return;
+    const wallSync: WallSync = sync;
     let cancelled = false;
 
     async function report() {
       const activeItem = playlist?.items[currentIndex] ?? null;
       const preloadForRun =
-        playlist?.preload?.wallId === sync.wallId ? playlist.preload : null;
+        playlist?.preload?.wallId === wallSync.wallId ? playlist.preload : null;
       const manifestReady =
-        Boolean(sync.manifestVersion) &&
-        browserReadyManifestRef.current === sync.manifestVersion;
+        Boolean(wallSync.manifestVersion) &&
+        browserReadyManifestRef.current === wallSync.manifestVersion;
       const browserCached =
         activeItem?.kind === "ASSET" &&
         manifestReady &&
@@ -618,10 +619,10 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
         deviceId,
         token: token as string,
         payload: {
-          wallId: sync.wallId,
+          wallId: wallSync.wallId,
           campaignId: preloadForRun?.campaignId ?? null,
           occurrenceKey: preloadForRun?.occurrenceKey ?? null,
-          manifestVersion: sync.manifestVersion,
+          manifestVersion: wallSync.manifestVersion,
           sceneMode:
             activeItem?.kind === "ASSET" ? activeItem.sceneMode ?? null : null,
           currentAssetId:
