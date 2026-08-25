@@ -82,6 +82,17 @@ export async function PATCH(request: Request, context: Context) {
 
   const nextRows = parsed.data.rows ?? existing.rows;
   const nextColumns = parsed.data.columns ?? existing.columns;
+  const nextSyncToleranceMs =
+    parsed.data.syncToleranceMs ?? existing.syncToleranceMs;
+  const nextHardResyncMs = parsed.data.hardResyncMs ?? existing.hardResyncMs;
+
+  if (nextHardResyncMs <= nextSyncToleranceMs) {
+    return NextResponse.json(
+      { error: "hardResyncMs must be greater than syncToleranceMs." },
+      { status: 400 },
+    );
+  }
+
   const geometryChanged =
     nextRows !== existing.rows || nextColumns !== existing.columns;
 
@@ -155,7 +166,12 @@ export async function PATCH(request: Request, context: Context) {
         rows: nextRows,
         columns: nextColumns,
         timezone: parsed.data.timezone,
-        syncToleranceMs: parsed.data.syncToleranceMs,
+        syncToleranceMs: nextSyncToleranceMs,
+        hardResyncMs: nextHardResyncMs,
+        preloadLeadSec: parsed.data.preloadLeadSec,
+        startGuardMs: parsed.data.startGuardMs,
+        requireAllMembersReady: parsed.data.requireAllMembersReady,
+        failurePolicy: parsed.data.failurePolicy,
         canvasWidth: topology.canvasWidth,
         canvasHeight: topology.canvasHeight,
       },
