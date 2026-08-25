@@ -23,6 +23,7 @@ const readiness = read("lib/screen-network-readiness.ts");
 const nativeCache = read("native-player/android/app/src/main/java/com/gspan/player/PersistentMediaCache.kt");
 const nativeClient = read("native-player/android/app/src/main/java/com/gspan/player/WallControlPlaneClient.kt");
 const nativeMonitor = read("native-player/android/app/src/main/java/com/gspan/player/WallRuntimeMonitor.kt");
+const nativeSchedule = read("native-player/android/app/src/main/java/com/gspan/player/PersistentWallSchedule.kt");
 
 const checks = [
   ["DisplayWall model", schema.includes("model DisplayWall")],
@@ -60,6 +61,9 @@ const checks = [
   ["Wall run blocks preload failure", wallReadiness.includes('status: "BLOCKED"')],
   ["Wall playback gated by ARMED/RUNNING release", playerPlaylist.includes('run.status === "ARMED"') && playerPlaylist.includes("run.releaseAt <= now")],
   ["Pending wall exposes preload plan", playerPlaylist.includes("manifestVersion") && playerPlaylist.includes("scheduledStartAt") && playerPlaylist.includes("assets")],
+  ["Preload carries persistent shared epochs", playerPlaylist.includes("scheduledStartEpochMs") && playerPlaylist.includes("scheduledEndEpochMs") && playerPlaylist.includes("releaseEpochMs")],
+  ["Preload carries screen-specific offline timeline", playerPlaylist.includes("const timeline = schedule.playlist.items.map") && playerPlaylist.includes("Dynamic collection requires live network")],
+  ["Preload carries optional file-size verification", playerPlaylist.includes("expectedBytes") && playerPlaylist.includes("rendition?.filesize")],
   ["Unavailable wall falls through to lower-priority schedule", playerPlaylist.includes("for (const candidate of activeCandidates)")],
   ["Redundant media origins", wallCreativeApi.includes("fallbackUrls") && playerPlaylist.includes("redundantUrls")],
   ["Player tries alternate media origins", player.includes("mediaCandidates") && player.includes("nextMediaOrigin")],
@@ -71,8 +75,11 @@ const checks = [
   ["Player performs tiered drift correction", player.includes("driftCorrection")],
   ["Wall player does not use local advance timer", player.includes("if (!currentItem || !token || playlist?.sync) return")],
   ["Hold-last-ready renders only previously loaded media", player.includes("lastReadyAsset") && player.includes("onCanPlay") && player.includes("onLoad")],
+  ["Browser reference reports wall telemetry", player.includes("sendWallTelemetry") && player.includes('playerVersion: "browser-reference"')],
+  ["Browser reference identifies cache-backed playback", player.includes('"BROWSER_CACHE"') && player.includes("browserReadyManifestRef")],
   ["Authenticated telemetry endpoint", wallTelemetry.includes("requestHasValidDeviceToken") && wallTelemetry.includes("displayWallTelemetry.upsert")],
   ["Telemetry rejects non-member devices", wallTelemetry.includes("not assigned to the requested display wall")],
+  ["Telemetry throttles redundant snapshots", wallTelemetry.includes("TELEMETRY_MIN_WRITE_MS") && wallTelemetry.includes("urgentChange") && wallTelemetry.includes("throttled: true")],
   ["Live wall status reports worst drift", wallStatus.includes("worstDriftMs") && wallStatus.includes("localFileCount")],
   ["Wall operations dashboard polls live status", wallDashboard.includes("setTimeout(refresh, 5_000)") && wallDashboard.includes("Local files")],
   ["Dashboard identifies production-safe LOCAL_FILE", wallDashboard.includes("LOCAL_FILE is the production-safe state")],
@@ -80,10 +87,16 @@ const checks = [
   ["Native cache uses atomic partial-file promotion", nativeCache.includes(".part") && nativeCache.includes("fd.sync()") && nativeCache.includes("renameTo")],
   ["Native manifest has READY sentinel", nativeCache.includes("READY_SENTINEL") && nativeCache.includes("manifestReady")],
   ["Native playback resolves local file URI", nativeCache.includes("Uri.fromFile") && nativeCache.includes("localUri")],
+  ["Native client parses persistent epochs", nativeClient.includes("scheduledStartEpochMs") && nativeClient.includes("releaseEpochMs")],
+  ["Native client parses screen-specific timeline", nativeClient.includes("TimelineItem") && nativeClient.includes("timelineArray")],
   ["Native client reports readiness", nativeClient.includes("wall-readiness") && nativeClient.includes("prepareAndAcknowledge")],
   ["Native client reports telemetry", nativeClient.includes("wall-telemetry") && nativeClient.includes('transport: String = "LOCAL_FILE"')],
   ["Native runtime emits periodic snapshots", nativeMonitor.includes("scheduleWithFixedDelay") && nativeMonitor.includes("reportTelemetry")],
   ["Native runtime counts failover and hard resync", nativeMonitor.includes("sourceFailovers") && nativeMonitor.includes("hardResyncs")],
+  ["Native schedule persists app-private timeline", nativeSchedule.includes("gspan-wall-state") && nativeSchedule.includes("ACTIVE_POINTER")],
+  ["Native schedule writes atomically", nativeSchedule.includes("fd.sync()") && nativeSchedule.includes(".part") && nativeSchedule.includes("renameTo")],
+  ["Offline execution fails closed unless ARMED/RUNNING", nativeSchedule.includes('plan.runStatus in setOf("ARMED", "RUNNING")') && nativeSchedule.includes("manifestReady")],
+  ["Offline timeline resolves shared phase", nativeSchedule.includes("offlinePosition") && nativeSchedule.includes("releaseEpochMs") && nativeSchedule.includes("clockOffsetMs")],
   ["Wall admin creation API", wallApi.includes("buildDisplayWallTopology")],
   ["Topology replacement invalidates tiles", wallMembersApi.includes('status: "PROCESSING"')],
   ["Logical master is optional", wallCreativeApi.includes("masterUrl: z.string().url().optional().nullable()")],
