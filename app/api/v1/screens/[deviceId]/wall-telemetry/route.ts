@@ -8,6 +8,8 @@ export const runtime = "nodejs";
 
 type Context = { params: Promise<{ deviceId: string }> };
 
+const TELEMETRY_MIN_WRITE_MS = 4_000;
+
 const telemetrySchema = z.object({
   wallId: z.string().trim().min(1),
   campaignId: z.string().trim().min(1).optional().nullable(),
@@ -97,6 +99,50 @@ export async function POST(request: Request, context: Context) {
   }
 
   const now = new Date();
+  const existing = await prisma.displayWallTelemetry.findUnique({
+    where: {
+      wallId_screenId: {
+        wallId: body.wallId,
+        screenId: screen.id,
+      },
+    },
+    select: {
+      observedAt: true,
+      sceneMode: true,
+      currentAssetId: true,
+      correctionMode: true,
+      transport: true,
+      cacheReady: true,
+      sourceFailovers: true,
+      hardResyncs: true,
+      lastError: true,
+    },
+  });
+
+  const urgentChange =
+    !existing ||
+    body.sceneMode !== existing.sceneMode ||
+    (body.currentAssetId ?? null) !== existing.currentAssetId ||
+    body.correctionMode === "HARD" ||
+    body.correctionMode !== existing.correctionMode ||
+    body.transport !== existing.transport ||
+    body.cacheReady !== existing.cacheReady ||
+    body.sourceFailovers > existing.sourceFailovers ||
+    body.hardResyncs > existing.hardResyncs ||
+    Boolean(body.lastError) !== Boolean(existing.lastError);
+
+  if (
+    existing &&
+    !urgentChange &&
+    now.getTime() - existing.observedAt.getTime() < TELEMETRY_MIN_WRITE_MS
+  ) {
+    return NextResponse.json({
+      ok: true,
+      throttled: true,
+      observedAt: existing.observedAt.toISOString(),
+    });
+  }
+
   const data = {
     campaignId: body.campaignId ?? null,
     occurrenceKey: body.occurrenceKey ?? null,
@@ -143,6 +189,7 @@ export async function POST(request: Request, context: Context) {
 
   return NextResponse.json({
     ok: true,
+    throttled: false,
     observedAt: telemetry.observedAt.toISOString(),
   });
 }
