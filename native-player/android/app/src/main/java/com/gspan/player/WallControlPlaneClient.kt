@@ -13,15 +13,31 @@ class WallControlPlaneClient(
     private val deviceId: String,
     private val bearerToken: String,
 ) {
+    data class TimelineItem(
+        val kind: String,
+        val durationSeconds: Int,
+        val assetId: String? = null,
+        val type: String? = null,
+        val sourceKind: String? = null,
+        val sceneMode: String? = null,
+        val reason: String? = null,
+    )
+
     data class PreloadPlan(
         val wallId: String,
         val wallName: String,
         val campaignId: String,
         val occurrenceKey: String,
         val manifestVersion: String,
+        val scheduledStartEpochMs: Long,
+        val scheduledEndEpochMs: Long,
         val releaseAt: String?,
+        val releaseEpochMs: Long?,
         val runStatus: String,
+        val failurePolicy: String,
+        val requireAllMembersReady: Boolean,
         val assets: List<PersistentMediaCache.AssetSpec>,
+        val timeline: List<TimelineItem>,
     )
 
     data class Telemetry(
@@ -72,9 +88,29 @@ class WallControlPlaneClient(
                         type = item.getString("type"),
                         primaryUrl = item.getString("url"),
                         fallbackUrls = fallbacks,
-                        expectedBytes = item.optLong("expectedBytes").takeIf { item.has("expectedBytes") && !item.isNull("expectedBytes") },
+                        expectedBytes = nullableLong(item, "expectedBytes"),
                     ),
                 )
+            }
+        }
+
+        val timelineArray = preload.optJSONArray("timeline")
+        val timeline = buildList {
+            if (timelineArray != null) {
+                for (index in 0 until timelineArray.length()) {
+                    val item = timelineArray.getJSONObject(index)
+                    add(
+                        TimelineItem(
+                            kind = item.getString("kind"),
+                            durationSeconds = item.optInt("durationSeconds", 1).coerceAtLeast(1),
+                            assetId = nullableString(item, "assetId"),
+                            type = nullableString(item, "type"),
+                            sourceKind = nullableString(item, "sourceKind"),
+                            sceneMode = nullableString(item, "sceneMode"),
+                            reason = nullableString(item, "reason"),
+                        ),
+                    )
+                }
             }
         }
 
@@ -84,9 +120,15 @@ class WallControlPlaneClient(
             campaignId = preload.getString("campaignId"),
             occurrenceKey = preload.getString("occurrenceKey"),
             manifestVersion = preload.getString("manifestVersion"),
-            releaseAt = preload.optString("releaseAt").takeIf { it.isNotBlank() },
+            scheduledStartEpochMs = preload.getLong("scheduledStartEpochMs"),
+            scheduledEndEpochMs = preload.getLong("scheduledEndEpochMs"),
+            releaseAt = nullableString(preload, "releaseAt"),
+            releaseEpochMs = nullableLong(preload, "releaseEpochMs"),
             runStatus = preload.optString("runStatus", "PREPARING"),
+            failurePolicy = preload.optString("failurePolicy", "HOLD_LAST_READY"),
+            requireAllMembersReady = preload.optBoolean("requireAllMembersReady", true),
             assets = assets,
+            timeline = timeline,
         )
     }
 
@@ -183,6 +225,12 @@ class WallControlPlaneClient(
             connection.disconnect()
         }
     }
+
+    private fun nullableLong(json: JSONObject, key: String): Long? =
+        if (json.has(key) && !json.isNull(key)) json.getLong(key) else null
+
+    private fun nullableString(json: JSONObject, key: String): String? =
+        if (json.has(key) && !json.isNull(key)) json.getString(key).takeIf { it.isNotBlank() } else null
 
     private fun encodePath(value: String): String =
         java.net.URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
