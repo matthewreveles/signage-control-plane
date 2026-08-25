@@ -25,6 +25,14 @@ function modeToQuery(mode: string | null | undefined) {
   return "ticker";
 }
 
+function syncGap(durationSeconds: number, reason: string) {
+  return {
+    kind: "SYNC_GAP" as const,
+    durationSeconds: Math.max(1, durationSeconds),
+    reason,
+  };
+}
+
 export async function GET(req: Request, ctx: Ctx) {
   const { deviceId } = await ctx.params;
 
@@ -33,6 +41,9 @@ export async function GET(req: Request, ctx: Ctx) {
     include: {
       schedules: {
         include: {
+          displayWall: {
+            include: { members: true },
+          },
           playlist: {
             include: {
               items: {
@@ -44,6 +55,17 @@ export async function GET(req: Request, ctx: Ctx) {
                       variants: {
                         where: { destination: "SIGNAGE" },
                         include: { asset: true },
+                      },
+                    },
+                  },
+                  displayWallCreative: {
+                    include: {
+                      wall: true,
+                      tiles: {
+                        include: {
+                          member: true,
+                          asset: { include: { renditions: true } },
+                        },
                       },
                     },
                   },
@@ -67,7 +89,7 @@ export async function GET(req: Request, ctx: Ctx) {
   const now = new Date();
 
   const activeSchedule = screen.schedules
-    .filter((s: ScheduleLike) => s.startAt <= now && s.endAt >= now)
+    .filter((schedule: ScheduleLike) => schedule.startAt <= now && schedule.endAt >= now)
     .sort((a: ScheduleLike, b: ScheduleLike) => b.priority - a.priority)[0];
 
   const baseDevice = {
@@ -85,31 +107,108 @@ export async function GET(req: Request, ctx: Ctx) {
     return NextResponse.json({
       device: baseDevice,
       items: [],
-      generatedAt: new Date().toISOString(),
+      sync: null,
+      generatedAt: now.toISOString(),
       pollSeconds: 60,
     });
   }
 
-  const items = activeSchedule.playlist.items
-    .map((pi) => {
-      if (pi.kind === "COLLECTION_WIDGET") {
-        if (!pi.collectionId) return null;
+  const wall = activeSchedule.displayWall;
+  const wallMember = wall?.members.find((member) => member.screenId === screen.id) ?? null;
+  const sync = wall
+    ? {
+        mode: "DISPLAY_WALL" as const,
+        wallId: wall.id,
+        wallName: wall.name,
+        epochMs: activeSchedule.startAt.getTime(),
+        serverNowMs: now.getTime(),
+        toleranceMs: wall.syncToleranceMs,
+        canvasWidth: wall.canvasWidth,
+        canvasHeight: wall.canvasHeight,
+        member: wallMember
+          ? {
+              slotIndex: wallMember.slotIndex,
+              row: wallMember.row,
+              column: wallMember.column,
+              x: wallMember.x,
+              y: wallMember.y,
+              width: wallMember.width,
+              height: wallMember.height,
+            }
+          : null,
+      }
+    : null;
 
-        const renderMode = pi.renderMode ?? "TICKER";
+  const items = activeSchedule.playlist.items
+    .map((playlistItem) => {
+      if (playlistItem.kind === "COLLECTION_WIDGET") {
+        if (!playlistItem.collectionId) {
+          return sync
+            ? syncGap(playlistItem.durationSec ?? 15, "Collection unavailable")
+            : null;
+        }
+
+        const renderMode = playlistItem.renderMode ?? "TICKER";
         const mode = modeToQuery(renderMode);
 
         return {
           kind: "COLLECTION_WIDGET" as const,
-          collectionId: pi.collectionId,
+          collectionId: playlistItem.collectionId,
           renderMode,
-          feedUrl: `/api/v1/collections/${pi.collectionId}/feed?mode=${mode}`,
-          durationSeconds: pi.durationSec ?? 15,
+          feedUrl: `/api/v1/collections/${playlistItem.collectionId}/feed?mode=${mode}`,
+          durationSeconds: playlistItem.durationSec ?? 15,
         };
       }
 
-      if (pi.kind === "CREATIVE_PACKAGE") {
-        const creativePackage = pi.creativePackage;
-        if (!creativePackage || creativePackage.status !== "APPROVED") return null;
+      if (playlistItem.kind === "DISPLAY_WALL") {
+        const creative = playlistItem.displayWallCreative;
+        const durationSeconds =
+          creative?.type === "VIDEO"
+            ? creative.durationSec ?? playlistItem.durationSec ?? 15
+            : playlistItem.durationSec ?? 10;
+
+        if (!sync || !creative || creative.status !== "READY") {
+          return sync ? syncGap(durationSeconds, "Wall creative unavailable") : null;
+        }
+        if (creative.wallId !== sync.wallId) {
+          return syncGap(durationSeconds, "Wall creative targets a different wall");
+        }
+
+        const tile = creative.tiles.find(
+          (candidate) => candidate.member.screenId === screen.id,
+        );
+        if (!tile || tile.asset.status !== "READY") {
+          return syncGap(durationSeconds, "Wall tile unavailable");
+        }
+
+        const selectedRendition = selectBestScreenVariant(
+          tile.asset.renditions,
+          { width: screen.width, height: screen.height },
+        );
+
+        return {
+          kind: "ASSET" as const,
+          sourceKind: "DISPLAY_WALL" as const,
+          wallId: creative.wallId,
+          wallCreativeId: creative.id,
+          wallCreativeName: creative.name,
+          slotIndex: tile.member.slotIndex,
+          assetId: tile.asset.id,
+          type: tile.asset.type,
+          url: selectedRendition?.url ?? tile.asset.masterUrl,
+          width: selectedRendition?.width ?? tile.member.width,
+          height: selectedRendition?.height ?? tile.member.height,
+          durationSeconds,
+        };
+      }
+
+      if (playlistItem.kind === "CREATIVE_PACKAGE") {
+        const creativePackage = playlistItem.creativePackage;
+        if (!creativePackage || creativePackage.status !== "APPROVED") {
+          return sync
+            ? syncGap(playlistItem.durationSec ?? 10, "Creative package unavailable")
+            : null;
+        }
 
         const selected = selectBestScreenVariant(
           creativePackage.variants.filter(
@@ -119,7 +218,11 @@ export async function GET(req: Request, ctx: Ctx) {
           ),
           { width: screen.width, height: screen.height },
         );
-        if (!selected) return null;
+        if (!selected) {
+          return sync
+            ? syncGap(playlistItem.durationSec ?? 10, "No compatible package variant")
+            : null;
+        }
 
         return {
           kind: "ASSET" as const,
@@ -137,16 +240,17 @@ export async function GET(req: Request, ctx: Ctx) {
           durationSeconds:
             selected.asset.type === "VIDEO"
               ? selected.asset.durationSec ?? 15
-              : pi.durationSec ?? 10,
+              : playlistItem.durationSec ?? 10,
         };
       }
 
       // Default: ASSET
-      const asset = pi.asset;
-      if (!asset) return null;
-
-      if (asset.status !== "READY") return null;
-      if (asset.orientation !== screen.orientation) return null;
+      const asset = playlistItem.asset;
+      if (!asset || asset.status !== "READY" || asset.orientation !== screen.orientation) {
+        return sync
+          ? syncGap(playlistItem.durationSec ?? 10, "Asset unavailable")
+          : null;
+      }
 
       const selectedRendition = selectBestScreenVariant(
         asset.renditions,
@@ -162,15 +266,16 @@ export async function GET(req: Request, ctx: Ctx) {
         width: selectedRendition?.width ?? null,
         height: selectedRendition?.height ?? null,
         durationSeconds:
-          asset.type === "VIDEO" ? asset.durationSec ?? 15 : pi.durationSec ?? 10,
+          asset.type === "VIDEO" ? asset.durationSec ?? 15 : playlistItem.durationSec ?? 10,
       };
     })
     .filter(Boolean);
 
   return NextResponse.json({
     device: baseDevice,
-    generatedAt: new Date().toISOString(),
-    pollSeconds: 60,
+    generatedAt: now.toISOString(),
+    pollSeconds: sync ? 15 : 60,
+    sync,
     items,
   });
 }
