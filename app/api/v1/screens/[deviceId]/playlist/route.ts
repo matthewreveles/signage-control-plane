@@ -96,6 +96,8 @@ export async function GET(req: Request, ctx: Ctx) {
     return NextResponse.json({ error: "Invalid device token" }, { status: 401 });
   }
 
+  type ScreenSchedule = NonNullable<typeof screen>["schedules"][number];
+
   const now = new Date();
   const wallSchedules = screen.schedules.filter(
     (schedule) => schedule.displayWall && schedule.campaign,
@@ -117,7 +119,7 @@ export async function GET(req: Request, ctx: Ctx) {
     wallRuns.map((run) => [runKey(run.wallId, run.campaignId, run.occurrenceKey), run]),
   );
 
-  function manifestVersionFor(schedule: (typeof screen.schedules)[number]) {
+  function manifestVersionFor(schedule: ScreenSchedule) {
     if (!schedule.displayWall || !schedule.campaign) return null;
 
     return wallManifestVersion({
@@ -135,7 +137,7 @@ export async function GET(req: Request, ctx: Ctx) {
     .filter((schedule: ScheduleLike) => schedule.startAt <= now && schedule.endAt >= now)
     .sort((a: ScheduleLike, b: ScheduleLike) => b.priority - a.priority);
 
-  let activeSchedule: (typeof screen.schedules)[number] | null = null;
+  let activeSchedule: ScreenSchedule | null = null;
   let activeWallRun: (typeof wallRuns)[number] | null = null;
 
   for (const candidate of activeCandidates) {
@@ -165,19 +167,20 @@ export async function GET(req: Request, ctx: Ctx) {
     }
   }
 
-  const pendingWallSchedule = wallSchedules
-    .filter((schedule) => {
-      if (schedule.endAt < now || !schedule.displayWall) return false;
-      const preloadStart = wallPreloadWindowStart({
-        scheduledStartAt: schedule.startAt,
-        preloadLeadSec: schedule.displayWall.preloadLeadSec,
-      });
-      return preloadStart <= now;
-    })
-    .sort((a, b) => {
-      if (a.priority !== b.priority) return b.priority - a.priority;
-      return a.startAt.getTime() - b.startAt.getTime();
-    })[0] ?? null;
+  const pendingWallSchedule =
+    wallSchedules
+      .filter((schedule) => {
+        if (schedule.endAt < now || !schedule.displayWall) return false;
+        const preloadStart = wallPreloadWindowStart({
+          scheduledStartAt: schedule.startAt,
+          preloadLeadSec: schedule.displayWall.preloadLeadSec,
+        });
+        return preloadStart <= now;
+      })
+      .sort((a, b) => {
+        if (a.priority !== b.priority) return b.priority - a.priority;
+        return a.startAt.getTime() - b.startAt.getTime();
+      })[0] ?? null;
 
   const baseDevice = {
     deviceId: screen.deviceId,
@@ -190,108 +193,111 @@ export async function GET(req: Request, ctx: Ctx) {
     timezone: screen.timezone,
   };
 
-  const preload = pendingWallSchedule?.displayWall && pendingWallSchedule.campaign
-    ? (() => {
-        const schedule = pendingWallSchedule;
-        const wall = schedule.displayWall!;
-        const version = manifestVersionFor(schedule)!;
-        const run = runMap.get(runKey(wall.id, schedule.campaign!.id, schedule.occurrenceKey));
+  const preload =
+    pendingWallSchedule?.displayWall && pendingWallSchedule.campaign
+      ? (() => {
+          const schedule = pendingWallSchedule;
+          const wall = schedule.displayWall!;
+          const version = manifestVersionFor(schedule)!;
+          const run = runMap.get(
+            runKey(wall.id, schedule.campaign!.id, schedule.occurrenceKey),
+          );
 
-        const assets = schedule.playlist.items.flatMap((playlistItem) => {
-          if (playlistItem.kind === "DISPLAY_WALL") {
-            const creative = playlistItem.displayWallCreative;
-            if (!creative || creative.status !== "READY" || creative.wallId !== wall.id) {
-              return [];
+          const assets = schedule.playlist.items.flatMap((playlistItem) => {
+            if (playlistItem.kind === "DISPLAY_WALL") {
+              const creative = playlistItem.displayWallCreative;
+              if (!creative || creative.status !== "READY" || creative.wallId !== wall.id) {
+                return [];
+              }
+
+              const tile = creative.tiles.find(
+                (candidate) => candidate.member.screenId === screen.id,
+              );
+              if (!tile || tile.asset.status !== "READY") return [];
+
+              const rendition = selectBestScreenVariant(tile.asset.renditions, {
+                width: screen.width,
+                height: screen.height,
+              });
+
+              return [
+                {
+                  assetId: tile.asset.id,
+                  url: rendition?.url ?? tile.asset.masterUrl,
+                  type: tile.asset.type,
+                  sourceKind: "DISPLAY_WALL" as const,
+                  sceneMode: creative.mode,
+                },
+              ];
             }
 
-            const tile = creative.tiles.find(
-              (candidate) => candidate.member.screenId === screen.id,
-            );
-            if (!tile || tile.asset.status !== "READY") return [];
+            if (playlistItem.kind === "CREATIVE_PACKAGE") {
+              const creativePackage = playlistItem.creativePackage;
+              if (!creativePackage || creativePackage.status !== "APPROVED") return [];
 
-            const rendition = selectBestScreenVariant(tile.asset.renditions, {
-              width: screen.width,
-              height: screen.height,
-            });
+              const selected = selectBestScreenVariant(
+                creativePackage.variants.filter(
+                  (variant) =>
+                    variant.asset.status === "READY" &&
+                    variant.asset.orientation === screen.orientation,
+                ),
+                { width: screen.width, height: screen.height },
+              );
 
-            return [
-              {
-                assetId: tile.asset.id,
-                url: rendition?.url ?? tile.asset.masterUrl,
-                type: tile.asset.type,
-                sourceKind: "DISPLAY_WALL" as const,
-                sceneMode: creative.mode,
-              },
-            ];
-          }
-
-          if (playlistItem.kind === "CREATIVE_PACKAGE") {
-            const creativePackage = playlistItem.creativePackage;
-            if (!creativePackage || creativePackage.status !== "APPROVED") return [];
-
-            const selected = selectBestScreenVariant(
-              creativePackage.variants.filter(
-                (variant) =>
-                  variant.asset.status === "READY" &&
-                  variant.asset.orientation === screen.orientation,
-              ),
-              { width: screen.width, height: screen.height },
-            );
-
-            return selected
-              ? [
-                  {
-                    assetId: selected.asset.id,
-                    url: selected.asset.masterUrl,
-                    type: selected.asset.type,
-                    sourceKind: "CREATIVE_PACKAGE" as const,
-                    sceneMode: null,
-                  },
-                ]
-              : [];
-          }
-
-          if (playlistItem.kind === "ASSET") {
-            const asset = playlistItem.asset;
-            if (!asset || asset.status !== "READY" || asset.orientation !== screen.orientation) {
-              return [];
+              return selected
+                ? [
+                    {
+                      assetId: selected.asset.id,
+                      url: selected.asset.masterUrl,
+                      type: selected.asset.type,
+                      sourceKind: "CREATIVE_PACKAGE" as const,
+                      sceneMode: null,
+                    },
+                  ]
+                : [];
             }
 
-            const rendition = selectBestScreenVariant(asset.renditions, {
-              width: screen.width,
-              height: screen.height,
-            });
+            if (playlistItem.kind === "ASSET") {
+              const asset = playlistItem.asset;
+              if (!asset || asset.status !== "READY" || asset.orientation !== screen.orientation) {
+                return [];
+              }
 
-            return [
-              {
-                assetId: asset.id,
-                url: rendition?.url ?? asset.masterUrl,
-                type: asset.type,
-                sourceKind: "ASSET" as const,
-                sceneMode: null,
-              },
-            ];
-          }
+              const rendition = selectBestScreenVariant(asset.renditions, {
+                width: screen.width,
+                height: screen.height,
+              });
 
-          return [];
-        });
+              return [
+                {
+                  assetId: asset.id,
+                  url: rendition?.url ?? asset.masterUrl,
+                  type: asset.type,
+                  sourceKind: "ASSET" as const,
+                  sceneMode: null,
+                },
+              ];
+            }
 
-        return {
-          wallId: wall.id,
-          wallName: wall.name,
-          campaignId: schedule.campaign!.id,
-          occurrenceKey: schedule.occurrenceKey,
-          manifestVersion: version,
-          scheduledStartAt: schedule.startAt.toISOString(),
-          scheduledEndAt: schedule.endAt.toISOString(),
-          releaseAt: run?.releaseAt?.toISOString() ?? null,
-          runStatus: run?.status ?? "PREPARING",
-          failurePolicy: wall.failurePolicy,
-          requireAllMembersReady: wall.requireAllMembersReady,
-          assets,
-        };
-      })()
-    : null;
+            return [];
+          });
+
+          return {
+            wallId: wall.id,
+            wallName: wall.name,
+            campaignId: schedule.campaign!.id,
+            occurrenceKey: schedule.occurrenceKey,
+            manifestVersion: version,
+            scheduledStartAt: schedule.startAt.toISOString(),
+            scheduledEndAt: schedule.endAt.toISOString(),
+            releaseAt: run?.releaseAt?.toISOString() ?? null,
+            runStatus: run?.status ?? "PREPARING",
+            failurePolicy: wall.failurePolicy,
+            requireAllMembersReady: wall.requireAllMembersReady,
+            assets,
+          };
+        })()
+      : null;
 
   if (!activeSchedule) {
     return NextResponse.json({
@@ -376,10 +382,10 @@ export async function GET(req: Request, ctx: Ctx) {
           return syncGap(durationSeconds, "Wall member asset unavailable");
         }
 
-        const selectedRendition = selectBestScreenVariant(
-          tile.asset.renditions,
-          { width: screen.width, height: screen.height },
-        );
+        const selectedRendition = selectBestScreenVariant(tile.asset.renditions, {
+          width: screen.width,
+          height: screen.height,
+        });
 
         return {
           kind: "ASSET" as const,
@@ -435,7 +441,6 @@ export async function GET(req: Request, ctx: Ctx) {
         };
       }
 
-      // Default: ASSET
       const asset = playlistItem.asset;
       if (!asset || asset.status !== "READY" || asset.orientation !== screen.orientation) {
         return sync
@@ -443,10 +448,10 @@ export async function GET(req: Request, ctx: Ctx) {
           : null;
       }
 
-      const selectedRendition = selectBestScreenVariant(
-        asset.renditions,
-        { width: screen.width, height: screen.height },
-      );
+      const selectedRendition = selectBestScreenVariant(asset.renditions, {
+        width: screen.width,
+        height: screen.height,
+      });
 
       return {
         kind: "ASSET" as const,
