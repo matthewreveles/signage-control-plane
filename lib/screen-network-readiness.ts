@@ -1,17 +1,26 @@
 import { prisma } from "@/lib/prisma";
 
 export const SCREEN_NETWORK_MIGRATION =
-  "20260812000000_screen_network_poc" as const;
+  "20260825101500_add_display_walls" as const;
 
 type ReadinessRow = {
   creativePackageTable: boolean;
   creativeVariantTable: boolean;
+  displayWallTable: boolean;
+  displayWallMemberTable: boolean;
+  displayWallCreativeTable: boolean;
+  displayWallCreativeTileTable: boolean;
   deviceTokenHashColumn: boolean;
   creativePackageIdColumn: boolean;
+  displayWallCreativeIdColumn: boolean;
+  campaignTargetWallIdColumn: boolean;
+  scheduleDisplayWallIdColumn: boolean;
   playbackIdColumn: boolean;
   creativePackageEnum: boolean;
   creativeDestinationEnum: boolean;
-  playlistItemEnumValue: boolean;
+  creativePackagePlaylistValue: boolean;
+  displayWallPlaylistValue: boolean;
+  displayWallCampaignTargetValue: boolean;
 };
 
 export type ScreenNetworkReadiness = {
@@ -27,6 +36,10 @@ export async function getScreenNetworkReadiness(): Promise<ScreenNetworkReadines
       SELECT
         to_regclass('public."CreativePackage"') IS NOT NULL AS "creativePackageTable",
         to_regclass('public."CreativeVariant"') IS NOT NULL AS "creativeVariantTable",
+        to_regclass('public."DisplayWall"') IS NOT NULL AS "displayWallTable",
+        to_regclass('public."DisplayWallMember"') IS NOT NULL AS "displayWallMemberTable",
+        to_regclass('public."DisplayWallCreative"') IS NOT NULL AS "displayWallCreativeTable",
+        to_regclass('public."DisplayWallCreativeTile"') IS NOT NULL AS "displayWallCreativeTileTable",
         EXISTS (
           SELECT 1
           FROM information_schema.columns
@@ -41,6 +54,27 @@ export async function getScreenNetworkReadiness(): Promise<ScreenNetworkReadines
             AND table_name = 'PlaylistItem'
             AND column_name = 'creativePackageId'
         ) AS "creativePackageIdColumn",
+        EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'PlaylistItem'
+            AND column_name = 'displayWallCreativeId'
+        ) AS "displayWallCreativeIdColumn",
+        EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'CampaignTarget'
+            AND column_name = 'wallId'
+        ) AS "campaignTargetWallIdColumn",
+        EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'ScheduleWindow'
+            AND column_name = 'displayWallId'
+        ) AS "scheduleDisplayWallIdColumn",
         EXISTS (
           SELECT 1
           FROM information_schema.columns
@@ -60,7 +94,21 @@ export async function getScreenNetworkReadiness(): Promise<ScreenNetworkReadines
           JOIN pg_type ON pg_type.oid = pg_enum.enumtypid
           WHERE pg_type.typname = 'PlaylistItemKind'
             AND pg_enum.enumlabel = 'CREATIVE_PACKAGE'
-        ) AS "playlistItemEnumValue"
+        ) AS "creativePackagePlaylistValue",
+        EXISTS (
+          SELECT 1
+          FROM pg_enum
+          JOIN pg_type ON pg_type.oid = pg_enum.enumtypid
+          WHERE pg_type.typname = 'PlaylistItemKind'
+            AND pg_enum.enumlabel = 'DISPLAY_WALL'
+        ) AS "displayWallPlaylistValue",
+        EXISTS (
+          SELECT 1
+          FROM pg_enum
+          JOIN pg_type ON pg_type.oid = pg_enum.enumtypid
+          WHERE pg_type.typname = 'CampaignTargetType'
+            AND pg_enum.enumlabel = 'WALL'
+        ) AS "displayWallCampaignTargetValue"
     `;
 
     const ready = Boolean(checks) && Object.values(checks).every(Boolean);
