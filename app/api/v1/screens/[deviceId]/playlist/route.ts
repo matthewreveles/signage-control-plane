@@ -22,6 +22,7 @@ type ScheduleLike = {
 type PreloadAsset = {
   assetId: string;
   url: string;
+  fallbackUrls: string[];
   type: "IMAGE" | "VIDEO";
   sourceKind: "ASSET" | "CREATIVE_PACKAGE" | "DISPLAY_WALL";
   sceneMode: "SPAN" | "INDEPENDENT" | null;
@@ -48,6 +49,16 @@ function syncGap(durationSeconds: number, reason: string) {
 
 function runKey(wallId: string, campaignId: string, occurrenceKey: string) {
   return `${wallId}:${campaignId}:${occurrenceKey}`;
+}
+
+function redundantUrls(
+  primaryUrl: string,
+  masterUrl: string,
+  renditions: Array<{ url: string }>,
+) {
+  return Array.from(
+    new Set([masterUrl, ...renditions.map((rendition) => rendition.url)]),
+  ).filter((url) => url !== primaryUrl);
 }
 
 export async function GET(req: Request, ctx: Ctx) {
@@ -227,11 +238,17 @@ export async function GET(req: Request, ctx: Ctx) {
                 width: screen.width,
                 height: screen.height,
               });
+              const url = rendition?.url ?? tile.asset.masterUrl;
 
               return [
                 {
                   assetId: tile.asset.id,
-                  url: rendition?.url ?? tile.asset.masterUrl,
+                  url,
+                  fallbackUrls: redundantUrls(
+                    url,
+                    tile.asset.masterUrl,
+                    tile.asset.renditions,
+                  ),
                   type: tile.asset.type,
                   sourceKind: "DISPLAY_WALL",
                   sceneMode: creative.mode,
@@ -257,6 +274,7 @@ export async function GET(req: Request, ctx: Ctx) {
                     {
                       assetId: selected.asset.id,
                       url: selected.asset.masterUrl,
+                      fallbackUrls: [],
                       type: selected.asset.type,
                       sourceKind: "CREATIVE_PACKAGE",
                       sceneMode: null,
@@ -275,11 +293,13 @@ export async function GET(req: Request, ctx: Ctx) {
                 width: screen.width,
                 height: screen.height,
               });
+              const url = rendition?.url ?? asset.masterUrl;
 
               return [
                 {
                   assetId: asset.id,
-                  url: rendition?.url ?? asset.masterUrl,
+                  url,
+                  fallbackUrls: redundantUrls(url, asset.masterUrl, asset.renditions),
                   type: asset.type,
                   sourceKind: "ASSET",
                   sceneMode: null,
@@ -394,6 +414,7 @@ export async function GET(req: Request, ctx: Ctx) {
           width: screen.width,
           height: screen.height,
         });
+        const url = selectedRendition?.url ?? tile.asset.masterUrl;
 
         return {
           kind: "ASSET" as const,
@@ -405,7 +426,8 @@ export async function GET(req: Request, ctx: Ctx) {
           slotIndex: tile.member.slotIndex,
           assetId: tile.asset.id,
           type: tile.asset.type,
-          url: selectedRendition?.url ?? tile.asset.masterUrl,
+          url,
+          fallbackUrls: redundantUrls(url, tile.asset.masterUrl, tile.asset.renditions),
           width: selectedRendition?.width ?? tile.member.width,
           height: selectedRendition?.height ?? tile.member.height,
           durationSeconds,
@@ -440,6 +462,7 @@ export async function GET(req: Request, ctx: Ctx) {
           assetId: selected.asset.id,
           type: selected.asset.type,
           url: selected.asset.masterUrl,
+          fallbackUrls: [],
           width: selected.width,
           height: selected.height,
           durationSeconds:
@@ -460,13 +483,15 @@ export async function GET(req: Request, ctx: Ctx) {
         width: screen.width,
         height: screen.height,
       });
+      const url = selectedRendition?.url ?? asset.masterUrl;
 
       return {
         kind: "ASSET" as const,
         sourceKind: "ASSET" as const,
         assetId: asset.id,
         type: asset.type,
-        url: selectedRendition?.url ?? asset.masterUrl,
+        url,
+        fallbackUrls: redundantUrls(url, asset.masterUrl, asset.renditions),
         width: selectedRendition?.width ?? null,
         height: selectedRendition?.height ?? null,
         durationSeconds:
