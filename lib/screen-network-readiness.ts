@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 
 export const SCREEN_NETWORK_MIGRATION =
-  "20260825133000_wall_resilience_hybrid" as const;
+  "20260825145500_wall_telemetry" as const;
 
 type ReadinessRow = {
   creativePackageTable: boolean;
@@ -12,6 +12,7 @@ type ReadinessRow = {
   displayWallCreativeTileTable: boolean;
   displayWallReadinessTable: boolean;
   displayWallRunTable: boolean;
+  displayWallTelemetryTable: boolean;
   deviceTokenHashColumn: boolean;
   creativePackageIdColumn: boolean;
   displayWallCreativeIdColumn: boolean;
@@ -28,6 +29,8 @@ type ReadinessRow = {
   wallSceneModeEnum: boolean;
   wallReadinessStatusEnum: boolean;
   wallRunStatusEnum: boolean;
+  wallCorrectionModeEnum: boolean;
+  wallPlaybackTransportEnum: boolean;
   creativePackagePlaylistValue: boolean;
   displayWallPlaylistValue: boolean;
   displayWallCampaignTargetValue: boolean;
@@ -52,6 +55,7 @@ export async function getScreenNetworkReadiness(): Promise<ScreenNetworkReadines
         to_regclass('public."DisplayWallCreativeTile"') IS NOT NULL AS "displayWallCreativeTileTable",
         to_regclass('public."DisplayWallReadinessAck"') IS NOT NULL AS "displayWallReadinessTable",
         to_regclass('public."DisplayWallRun"') IS NOT NULL AS "displayWallRunTable",
+        to_regclass('public."DisplayWallTelemetry"') IS NOT NULL AS "displayWallTelemetryTable",
         EXISTS (
           SELECT 1 FROM information_schema.columns
           WHERE table_schema = 'public' AND table_name = 'Screen' AND column_name = 'deviceTokenHash'
@@ -111,6 +115,12 @@ export async function getScreenNetworkReadiness(): Promise<ScreenNetworkReadines
         EXISTS (
           SELECT 1 FROM pg_type WHERE typname = 'DisplayWallRunStatus'
         ) AS "wallRunStatusEnum",
+        EXISTS (
+          SELECT 1 FROM pg_type WHERE typname = 'DisplayWallCorrectionMode'
+        ) AS "wallCorrectionModeEnum",
+        EXISTS (
+          SELECT 1 FROM pg_type WHERE typname = 'DisplayWallPlaybackTransport'
+        ) AS "wallPlaybackTransportEnum",
         EXISTS (
           SELECT 1
           FROM pg_enum
