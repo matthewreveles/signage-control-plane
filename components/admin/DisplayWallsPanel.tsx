@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 
 type Orientation = "LANDSCAPE" | "PORTRAIT";
+type FailurePolicy = "HOLD_LAST_READY" | "FALLBACK_STANDARD";
 
 type ScreenOption = {
   id: string;
@@ -38,6 +39,11 @@ type DisplayWallRow = {
   canvasHeight: number;
   timezone: string;
   syncToleranceMs: number;
+  hardResyncMs: number;
+  preloadLeadSec: number;
+  startGuardMs: number;
+  requireAllMembersReady: boolean;
+  failurePolicy: FailurePolicy;
   members: WallMember[];
   _count?: {
     creatives: number;
@@ -53,6 +59,11 @@ type EditorState = {
   columns: number;
   timezone: string;
   syncToleranceMs: number;
+  hardResyncMs: number;
+  preloadLeadSec: number;
+  startGuardMs: number;
+  requireAllMembersReady: boolean;
+  failurePolicy: FailurePolicy;
   slots: string[];
 };
 
@@ -69,6 +80,11 @@ function emptyEditor(screenCount: number): EditorState {
     columns,
     timezone: "America/Phoenix",
     syncToleranceMs: 80,
+    hardResyncMs: 350,
+    preloadLeadSec: 300,
+    startGuardMs: 5000,
+    requireAllMembersReady: true,
+    failurePolicy: "HOLD_LAST_READY",
     slots: Array.from({ length: columns }, () => ""),
   };
 }
@@ -90,6 +106,11 @@ function editorForWall(wall: DisplayWallRow): EditorState {
     columns: wall.columns,
     timezone: wall.timezone,
     syncToleranceMs: wall.syncToleranceMs,
+    hardResyncMs: wall.hardResyncMs,
+    preloadLeadSec: wall.preloadLeadSec,
+    startGuardMs: wall.startGuardMs,
+    requireAllMembersReady: wall.requireAllMembersReady,
+    failurePolicy: wall.failurePolicy,
     slots,
   };
 }
@@ -238,6 +259,10 @@ export default function DisplayWallsPanel({
       setMessage("This first wall topology supports up to 200 assigned screen positions.");
       return;
     }
+    if (editor.hardResyncMs <= editor.syncToleranceMs) {
+      setMessage("Hard resync must be greater than normal sync tolerance.");
+      return;
+    }
 
     setSaving(true);
     setMessage("");
@@ -250,6 +275,11 @@ export default function DisplayWallsPanel({
         columns: editor.columns,
         timezone: editor.timezone.trim() || "America/Phoenix",
         syncToleranceMs: editor.syncToleranceMs,
+        hardResyncMs: editor.hardResyncMs,
+        preloadLeadSec: editor.preloadLeadSec,
+        startGuardMs: editor.startGuardMs,
+        requireAllMembersReady: editor.requireAllMembersReady,
+        failurePolicy: editor.failurePolicy,
       };
 
       let saved: DisplayWallRow;
@@ -360,6 +390,10 @@ export default function DisplayWallsPanel({
                 {wall.members.length} screens · {wall.rows}×{wall.columns} ·{" "}
                 {wall.canvasWidth > 0 ? `${wall.canvasWidth}×${wall.canvasHeight}` : "canvas pending"}
               </div>
+              <div className="mt-1 text-[11px] font-medium text-emerald-700">
+                {wall.requireAllMembersReady ? "all-ready barrier" : "partial-ready allowed"} ·{" "}
+                {Math.round(wall.preloadLeadSec / 60)} min preload
+              </div>
             </button>
           ))}
 
@@ -421,29 +455,12 @@ export default function DisplayWallsPanel({
               />
             </label>
 
-            <label className="grid gap-1">
+            <label className="grid gap-1 md:col-span-2">
               <span className="text-xs font-medium text-zinc-500">Timezone</span>
               <input
                 value={editor.timezone}
                 onChange={(event) =>
                   setEditor((current) => ({ ...current, timezone: event.target.value }))
-                }
-                className="h-10 rounded-xl border border-zinc-300 px-3 text-sm"
-              />
-            </label>
-
-            <label className="grid gap-1">
-              <span className="text-xs font-medium text-zinc-500">Sync tolerance (ms)</span>
-              <input
-                type="number"
-                min={16}
-                max={1000}
-                value={editor.syncToleranceMs}
-                onChange={(event) =>
-                  setEditor((current) => ({
-                    ...current,
-                    syncToleranceMs: Math.max(16, Math.min(1000, Number(event.target.value) || 80)),
-                  }))
                 }
                 className="h-10 rounded-xl border border-zinc-300 px-3 text-sm"
               />
@@ -489,6 +506,136 @@ export default function DisplayWallsPanel({
                 : "Not established"
             }
           />
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-5">
+          <div className="flex flex-col gap-1">
+            <p className="text-xs font-bold uppercase tracking-[0.18em] text-emerald-700">
+              Playback resilience
+            </p>
+            <h3 className="font-semibold text-emerald-950">Pre-arm every synchronized run</h3>
+            <p className="text-sm leading-6 text-emerald-900/80">
+              These controls determine how aggressively G-SPAN preloads, verifies and synchronizes the cluster before a wall campaign is allowed to take over.
+            </p>
+          </div>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <label className="grid gap-1">
+              <span className="text-xs font-medium text-emerald-900">Sync tolerance (ms)</span>
+              <input
+                type="number"
+                min={16}
+                max={1000}
+                value={editor.syncToleranceMs}
+                onChange={(event) =>
+                  setEditor((current) => ({
+                    ...current,
+                    syncToleranceMs: Math.max(16, Math.min(1000, Number(event.target.value) || 80)),
+                  }))
+                }
+                className="h-10 rounded-xl border border-emerald-300 bg-white px-3 text-sm"
+              />
+              <span className="text-[11px] text-emerald-800">Drift inside this range is left untouched.</span>
+            </label>
+
+            <label className="grid gap-1">
+              <span className="text-xs font-medium text-emerald-900">Hard resync (ms)</span>
+              <input
+                type="number"
+                min={50}
+                max={5000}
+                value={editor.hardResyncMs}
+                onChange={(event) =>
+                  setEditor((current) => ({
+                    ...current,
+                    hardResyncMs: Math.max(50, Math.min(5000, Number(event.target.value) || 350)),
+                  }))
+                }
+                className="h-10 rounded-xl border border-emerald-300 bg-white px-3 text-sm"
+              />
+              <span className="text-[11px] text-emerald-800">Moderate drift is softened; severe drift seeks.</span>
+            </label>
+
+            <label className="grid gap-1">
+              <span className="text-xs font-medium text-emerald-900">Preload lead (sec)</span>
+              <input
+                type="number"
+                min={30}
+                max={86400}
+                value={editor.preloadLeadSec}
+                onChange={(event) =>
+                  setEditor((current) => ({
+                    ...current,
+                    preloadLeadSec: Math.max(30, Math.min(86400, Number(event.target.value) || 300)),
+                  }))
+                }
+                className="h-10 rounded-xl border border-emerald-300 bg-white px-3 text-sm"
+              />
+              <span className="text-[11px] text-emerald-800">Default: 300 sec / 5 minutes.</span>
+            </label>
+
+            <label className="grid gap-1">
+              <span className="text-xs font-medium text-emerald-900">Release guard (ms)</span>
+              <input
+                type="number"
+                min={1000}
+                max={60000}
+                value={editor.startGuardMs}
+                onChange={(event) =>
+                  setEditor((current) => ({
+                    ...current,
+                    startGuardMs: Math.max(1000, Math.min(60000, Number(event.target.value) || 5000)),
+                  }))
+                }
+                className="h-10 rounded-xl border border-emerald-300 bg-white px-3 text-sm"
+              />
+              <span className="text-[11px] text-emerald-800">Shared future start after the final READY.</span>
+            </label>
+          </div>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <label className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-white p-4">
+              <input
+                type="checkbox"
+                checked={editor.requireAllMembersReady}
+                onChange={(event) =>
+                  setEditor((current) => ({
+                    ...current,
+                    requireAllMembersReady: event.target.checked,
+                  }))
+                }
+                className="mt-1"
+              />
+              <span>
+                <span className="block text-sm font-semibold text-emerald-950">
+                  Require every member READY
+                </span>
+                <span className="mt-1 block text-xs leading-5 text-emerald-800">
+                  Recommended. The synchronized takeover will not arm if even one required screen has not verified its exact media revision.
+                </span>
+              </span>
+            </label>
+
+            <label className="grid gap-1 rounded-xl border border-emerald-200 bg-white p-4">
+              <span className="text-sm font-semibold text-emerald-950">Failure policy</span>
+              <select
+                value={editor.failurePolicy}
+                onChange={(event) =>
+                  setEditor((current) => ({
+                    ...current,
+                    failurePolicy: event.target.value as FailurePolicy,
+                  }))
+                }
+                className="h-10 rounded-xl border border-emerald-300 bg-white px-3 text-sm"
+              >
+                <option value="HOLD_LAST_READY">Hold last confirmed frame/asset</option>
+                <option value="FALLBACK_STANDARD">Keep lower-priority standard schedule</option>
+              </select>
+              <span className="text-xs leading-5 text-emerald-800">
+                A blocked wall never partially starts. Choose what remains on-screen while the cluster recovers.
+              </span>
+            </label>
+          </div>
         </div>
 
         <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
