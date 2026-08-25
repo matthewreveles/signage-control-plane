@@ -58,6 +58,33 @@ enum CampaignTargetType {
 }
 
 /**
+ * --- Display walls / synchronized clusters ---
+ */
+enum DisplayWallSceneMode {
+  SPAN
+  INDEPENDENT
+}
+
+enum DisplayWallFailurePolicy {
+  HOLD_LAST_READY
+  FALLBACK_STANDARD
+}
+
+enum DisplayWallReadinessStatus {
+  PRELOADING
+  READY
+  FAILED
+}
+
+enum DisplayWallRunStatus {
+  PREPARING
+  ARMED
+  RUNNING
+  BLOCKED
+  COMPLETE
+}
+
+/**
  * --- Structured vendor input ---
  */
 enum ContentCollectionType {
@@ -108,9 +135,10 @@ model Screen {
   schedules ScheduleWindow[]
   logs      ProofOfPlayLog[]
 
-  groupMembers       ScreenGroupMember[]
-  displayWallMembers DisplayWallMember[]
-  campaignTargets    CampaignTarget[]
+  groupMembers         ScreenGroupMember[]
+  displayWallMembers   DisplayWallMember[]
+  campaignTargets      CampaignTarget[]
+  displayWallReadiness DisplayWallReadinessAck[]
 }
 
 model ScreenGroup {
@@ -145,12 +173,17 @@ model DisplayWall {
   name        String
   description String?
 
-  rows          Int @default(1)
-  columns       Int @default(1)
-  canvasWidth   Int @default(0)
-  canvasHeight  Int @default(0)
-  syncToleranceMs Int @default(80)
-  timezone      String @default("America/Phoenix")
+  rows                    Int @default(1)
+  columns                 Int @default(1)
+  canvasWidth             Int @default(0)
+  canvasHeight            Int @default(0)
+  syncToleranceMs         Int @default(80)
+  hardResyncMs            Int @default(350)
+  preloadLeadSec          Int @default(120)
+  startGuardMs            Int @default(2000)
+  requireAllMembersReady  Boolean @default(true)
+  failurePolicy           DisplayWallFailurePolicy @default(HOLD_LAST_READY)
+  timezone                String @default("America/Phoenix")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -159,6 +192,8 @@ model DisplayWall {
   creatives       DisplayWallCreative[]
   campaignTargets CampaignTarget[]
   schedules       ScheduleWindow[]
+  readinessAcks   DisplayWallReadinessAck[]
+  runs            DisplayWallRun[]
 }
 
 model DisplayWallMember {
@@ -256,7 +291,7 @@ model PlaylistItem {
   creativePackageId String?
   creativePackage   CreativePackage? @relation(fields: [creativePackageId], references: [id], onDelete: Cascade)
 
-  // DISPLAY_WALL item
+  // DISPLAY_WALL item. The linked scene may be SPAN or INDEPENDENT.
   displayWallCreativeId String?
   displayWallCreative   DisplayWallCreative? @relation(fields: [displayWallCreativeId], references: [id], onDelete: Cascade)
 
@@ -319,11 +354,12 @@ model DisplayWallCreative {
   wall   DisplayWall @relation(fields: [wallId], references: [id], onDelete: Cascade)
 
   name         String
+  mode         DisplayWallSceneMode @default(SPAN)
   type         AssetType
   status       AssetStatus @default(PROCESSING)
-  masterUrl    String
-  masterWidth  Int
-  masterHeight Int
+  masterUrl    String?
+  masterWidth  Int?
+  masterHeight Int?
   durationSec  Int?
   sourceJobId  String?
 
@@ -334,6 +370,7 @@ model DisplayWallCreative {
   playlistItems PlaylistItem[]
 
   @@index([wallId, status, createdAt])
+  @@index([wallId, mode, status])
   @@index([sourceJobId])
 }
 
@@ -379,8 +416,10 @@ model Campaign {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  targets   CampaignTarget[]
-  schedules ScheduleWindow[]
+  targets           CampaignTarget[]
+  schedules         ScheduleWindow[]
+  wallReadinessAcks DisplayWallReadinessAck[]
+  wallRuns          DisplayWallRun[]
 
   @@index([status, startAt, endAt])
 }
@@ -437,6 +476,55 @@ model ScheduleWindow {
   @@index([screenId, startAt, endAt])
   @@index([campaignId])
   @@index([displayWallId])
+}
+
+model DisplayWallReadinessAck {
+  id String @id @default(cuid())
+
+  wallId String
+  wall   DisplayWall @relation(fields: [wallId], references: [id], onDelete: Cascade)
+
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  screenId String
+  screen   Screen @relation(fields: [screenId], references: [id], onDelete: Cascade)
+
+  occurrenceKey  String
+  manifestVersion String
+  status          DisplayWallReadinessStatus @default(PRELOADING)
+  error           String?
+  cachedAt        DateTime?
+  observedAt      DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([wallId, campaignId, occurrenceKey, screenId])
+  @@index([wallId, campaignId, occurrenceKey, manifestVersion, status])
+  @@index([screenId, updatedAt])
+}
+
+model DisplayWallRun {
+  id String @id @default(cuid())
+
+  wallId String
+  wall   DisplayWall @relation(fields: [wallId], references: [id], onDelete: Cascade)
+
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  occurrenceKey   String
+  manifestVersion String
+  status          DisplayWallRunStatus @default(PREPARING)
+  releaseAt       DateTime?
+  blockedReason   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([wallId, campaignId, occurrenceKey])
+  @@index([wallId, status, releaseAt])
 }
 
 model ProofOfPlayLog {
