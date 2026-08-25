@@ -62,7 +62,7 @@ export default async function CampaignsPage() {
     prisma.displayWallCreative.findMany({
       where: { status: "READY" },
       orderBy: { createdAt: "desc" },
-      include: { wall: true },
+      include: { wall: { include: { members: true } } },
       take: 100,
     }),
   ]);
