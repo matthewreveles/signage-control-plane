@@ -20,8 +20,8 @@ export default function SchemaPendingNotice({
         </h2>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-700 dark:text-zinc-300">
           {databaseUnavailable
-            ? "The control plane cannot verify its PostgreSQL connection. Confirm the deployment environment before testing package delivery or player pairing."
-            : "The application build is healthy, but the additive proof-of-concept migration has not been applied. Creative packages, authenticated player pairing and idempotent proof-of-play remain deliberately unavailable until the schema checkpoint passes."}
+            ? "The control plane cannot verify its PostgreSQL connection. Confirm the deployment environment before testing scheduling, package delivery, wall configuration or player pairing."
+            : "The application build is healthy, but the latest reviewed Screen Network migration has not been applied to this environment. Database-dependent workspaces remain deliberately unavailable until the schema checkpoint passes, preventing new code from writing against an older schema."}
         </p>
       </div>
 
