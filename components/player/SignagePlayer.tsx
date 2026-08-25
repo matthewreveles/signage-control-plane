@@ -5,8 +5,12 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 import {
-  estimateServerClockOffsetMs,
+  clockSample,
+  driftCorrection,
   expectedWallPosition,
+  monotonicEpochNowMs,
+  stableServerClockOffsetMs,
+  type ClockSample,
 } from "@/lib/wall-sync";
 
 type AssetItem = {
@@ -23,6 +27,7 @@ type AssetItem = {
   brand?: string;
   variantId?: string;
   presetKey?: string;
+  sceneMode?: "SPAN" | "INDEPENDENT";
   wallId?: string;
   wallCreativeId?: string;
   wallCreativeName?: string;
@@ -52,6 +57,9 @@ type WallSync = {
   epochMs: number;
   serverNowMs: number;
   toleranceMs: number;
+  hardResyncMs: number;
+  failurePolicy: "HOLD_LAST_READY" | "FALLBACK_STANDARD";
+  manifestVersion: string | null;
   canvasWidth: number;
   canvasHeight: number;
   member: {
@@ -63,6 +71,27 @@ type WallSync = {
     width: number;
     height: number;
   } | null;
+};
+
+type WallPreloadPlan = {
+  wallId: string;
+  wallName: string;
+  campaignId: string;
+  occurrenceKey: string;
+  manifestVersion: string;
+  scheduledStartAt: string;
+  scheduledEndAt: string;
+  releaseAt: string | null;
+  runStatus: "PREPARING" | "ARMED" | "RUNNING" | "BLOCKED" | "COMPLETE";
+  failurePolicy: "HOLD_LAST_READY" | "FALLBACK_STANDARD";
+  requireAllMembersReady: boolean;
+  assets: Array<{
+    assetId: string;
+    url: string;
+    type: "IMAGE" | "VIDEO";
+    sourceKind: "ASSET" | "CREATIVE_PACKAGE" | "DISPLAY_WALL";
+    sceneMode: "SPAN" | "INDEPENDENT" | null;
+  }>;
 };
 
 type PlaylistResponse = {
@@ -78,6 +107,7 @@ type PlaylistResponse = {
   };
   generatedAt: string;
   pollSeconds: number;
+  preload: WallPreloadPlan | null;
   sync: WallSync | null;
   items: PlaylistItem[];
 };
@@ -131,15 +161,138 @@ function itemKey(item: PlaylistItem | null, index: number) {
   return `${index}:gap:${item.reason}`;
 }
 
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function consumeResponse(response: Response) {
+  if (!response.body) {
+    await response.arrayBuffer();
+    return;
+  }
+
+  const reader = response.body.getReader();
+  while (true) {
+    const result = await reader.read();
+    if (result.done) return;
+  }
+}
+
+async function verifyImage(url: string) {
+  const image = new window.Image();
+  image.decoding = "async";
+  image.src = url;
+
+  if (typeof image.decode === "function") {
+    await image.decode();
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error("Image decode failed"));
+  });
+}
+
+async function verifyVideo(url: string) {
+  await new Promise<void>((resolve, reject) => {
+    const video = document.createElement("video");
+    let settled = false;
+
+    const cleanup = () => {
+      video.removeAttribute("src");
+      video.load();
+    };
+
+    const succeed = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+
+    const fail = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error("Video metadata/decode readiness failed"));
+    };
+
+    video.muted = true;
+    video.preload = "auto";
+    video.playsInline = true;
+    video.addEventListener("loadeddata", succeed, { once: true });
+    video.addEventListener("error", fail, { once: true });
+    video.src = url;
+    video.load();
+
+    window.setTimeout(fail, 20_000);
+  });
+}
+
+async function preloadAsset(asset: WallPreloadPlan["assets"][number]) {
+  const response = await fetch(asset.url, { cache: "force-cache" });
+  if (!response.ok && response.type !== "opaque") {
+    throw new Error(`Asset preload returned HTTP ${response.status}`);
+  }
+
+  await consumeResponse(response);
+
+  if (asset.type === "VIDEO") {
+    await verifyVideo(asset.url);
+  } else {
+    await verifyImage(asset.url);
+  }
+}
+
+async function reportWallReadiness({
+  deviceId,
+  token,
+  preload,
+  status,
+  error,
+}: {
+  deviceId: string;
+  token: string;
+  preload: WallPreloadPlan;
+  status: "PRELOADING" | "READY" | "FAILED";
+  error?: string;
+}) {
+  const response = await fetch(
+    `/api/v1/screens/${encodeURIComponent(deviceId)}/wall-readiness`,
+    {
+      method: "POST",
+      headers: { ...headers(token), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        wallId: preload.wallId,
+        campaignId: preload.campaignId,
+        occurrenceKey: preload.occurrenceKey,
+        manifestVersion: preload.manifestVersion,
+        status,
+        error: error ?? null,
+      }),
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Readiness acknowledgement failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
 export default function SignagePlayer({ deviceId }: { deviceId: string }) {
   const [token, setToken] = useState<string | null>(null);
   const [playlist, setPlaylist] = useState<PlaylistResponse | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [clockOffsetMs, setClockOffsetMs] = useState(0);
+  const [lastReadyAsset, setLastReadyAsset] = useState<AssetItem | null>(null);
   const [connection, setConnection] = useState<
     "CONNECTING" | "ONLINE" | "OFFLINE" | "UNPAIRED"
   >("CONNECTING");
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const clockSamplesRef = useRef<ClockSample[]>([]);
+  const preloadVersionRef = useRef<string | null>(null);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(`gspan-screen-token:${deviceId}`);
@@ -153,7 +306,7 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
     let timeout: ReturnType<typeof setTimeout> | undefined;
 
     async function poll() {
-      const requestStartedAtMs = Date.now();
+      const requestStartedAtMs = monotonicEpochNowMs();
 
       try {
         const response = await fetch(
@@ -163,16 +316,19 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
         if (!response.ok) throw new Error(String(response.status));
 
         const result = (await response.json()) as PlaylistResponse;
-        const responseReceivedAtMs = Date.now();
+        const responseReceivedAtMs = monotonicEpochNowMs();
         if (cancelled) return;
 
-        let nextClockOffsetMs = 0;
+        let nextClockOffsetMs = clockOffsetMs;
         if (result.sync) {
-          nextClockOffsetMs = estimateServerClockOffsetMs({
+          const sample = clockSample({
             requestStartedAtMs,
             responseReceivedAtMs,
             serverNowMs: result.sync.serverNowMs,
           });
+
+          clockSamplesRef.current = [...clockSamplesRef.current.slice(-8), sample];
+          nextClockOffsetMs = stableServerClockOffsetMs(clockSamplesRef.current);
         }
 
         setClockOffsetMs(nextClockOffsetMs);
@@ -191,11 +347,11 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
         }
 
         setConnection("ONLINE");
-        timeout = setTimeout(poll, Math.max(15, result.pollSeconds) * 1000);
+        timeout = setTimeout(poll, Math.max(1, result.pollSeconds) * 1000);
       } catch {
         if (cancelled) return;
         setConnection("OFFLINE");
-        timeout = setTimeout(poll, 15_000);
+        timeout = setTimeout(poll, 5_000);
       }
     }
 
@@ -205,6 +361,71 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
       if (timeout) clearTimeout(timeout);
     };
   }, [deviceId, token]);
+
+  useEffect(() => {
+    if (!token || !playlist?.preload) return;
+
+    const preload = playlist.preload;
+    if (preloadVersionRef.current === preload.manifestVersion) return;
+
+    let cancelled = false;
+    preloadVersionRef.current = preload.manifestVersion;
+
+    async function arm() {
+      let retry = 0;
+
+      while (!cancelled) {
+        try {
+          await reportWallReadiness({
+            deviceId,
+            token: token as string,
+            preload,
+            status: "PRELOADING",
+          });
+
+          const uniqueAssets = Array.from(
+            new Map(preload.assets.map((asset) => [asset.url, asset])).values(),
+          );
+
+          for (const asset of uniqueAssets) {
+            if (cancelled) return;
+            await preloadAsset(asset);
+          }
+
+          if (cancelled) return;
+
+          await reportWallReadiness({
+            deviceId,
+            token: token as string,
+            preload,
+            status: "READY",
+          });
+          return;
+        } catch (error) {
+          if (cancelled) return;
+
+          await reportWallReadiness({
+            deviceId,
+            token: token as string,
+            preload,
+            status: "FAILED",
+            error: error instanceof Error ? error.message : "Preload failed",
+          }).catch(() => null);
+
+          retry += 1;
+          await sleep(Math.min(30_000, 2_000 * 2 ** Math.min(retry, 4)));
+        }
+      }
+    }
+
+    void arm();
+    return () => {
+      cancelled = true;
+      if (preloadVersionRef.current === preload.manifestVersion) {
+        preloadVersionRef.current = null;
+      }
+    };
+  }, [deviceId, playlist?.preload, token]);
 
   useEffect(() => {
     if (!token) return;
@@ -239,7 +460,7 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
       const position = expectedWallPosition({
         items: playlist.items,
         epochMs: sync.epochMs,
-        localNowMs: Date.now(),
+        localNowMs: monotonicEpochNowMs(),
         clockOffsetMs,
       });
       if (!position) return;
@@ -260,14 +481,22 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
           : expectedItem.durationSeconds;
       const expectedSeconds =
         (position.offsetMs / 1000) % Math.max(0.001, mediaDurationSec);
-      const driftMs = Math.abs(video.currentTime - expectedSeconds) * 1000;
+      const signedDriftMs = (video.currentTime - expectedSeconds) * 1000;
+      const correction = driftCorrection({
+        signedDriftMs,
+        toleranceMs: sync.toleranceMs,
+        hardResyncMs: sync.hardResyncMs,
+      });
 
-      if (driftMs > sync.toleranceMs) {
+      if (correction.mode === "HARD") {
         try {
+          video.playbackRate = 1;
           video.currentTime = expectedSeconds;
         } catch {
           // Some embedded browsers reject seeks until enough metadata is loaded.
         }
+      } else {
+        video.playbackRate = correction.playbackRate;
       }
 
       if (video.paused) {
@@ -276,12 +505,18 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
     }
 
     alignToWallClock();
-    const interval = window.setInterval(alignToWallClock, 250);
+    const interval = window.setInterval(alignToWallClock, 200);
     return () => window.clearInterval(interval);
   }, [playlist, clockOffsetMs]);
 
   const currentItem = playlist?.items[currentIndex] ?? null;
   const currentKey = itemKey(currentItem, currentIndex);
+
+  useEffect(() => {
+    if (currentItem?.kind === "ASSET") {
+      setLastReadyAsset(currentItem);
+    }
+  }, [currentKey, currentItem]);
 
   // Ordinary single-screen playback remains deliberately independent. Wall
   // playback never uses this local timer; the shared epoch chooses every item.
@@ -365,7 +600,7 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
     const position = expectedWallPosition({
       items: playlist.items,
       epochMs: sync.epochMs,
-      localNowMs: Date.now(),
+      localNowMs: monotonicEpochNowMs(),
       clockOffsetMs,
     });
     if (!position || position.index !== currentIndex) return;
@@ -378,6 +613,7 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
       (position.offsetMs / 1000) % Math.max(0.001, mediaDurationSec);
 
     try {
+      video.playbackRate = 1;
       video.currentTime = expectedSeconds;
     } catch {
       // The periodic wall alignment retries the seek when the player is ready.
@@ -412,7 +648,16 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
     );
   }
 
-  if (!playlist || !currentItem) {
+  const heldAsset =
+    !currentItem &&
+    playlist?.preload?.failurePolicy === "HOLD_LAST_READY"
+      ? lastReadyAsset
+      : currentItem?.kind === "SYNC_GAP" &&
+          playlist?.sync?.failurePolicy === "HOLD_LAST_READY"
+        ? lastReadyAsset
+        : null;
+
+  if (!playlist || (!currentItem && !heldAsset)) {
     return (
       <PlayerMessage
         eyebrow={
@@ -421,7 +666,9 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
         title={
           connection === "OFFLINE"
             ? "Running without a fresh playlist."
-            : "Waiting for an active campaign."
+            : playlist?.preload
+              ? "Wall campaign is pre-arming."
+              : "Waiting for an active campaign."
         }
         body={
           playlist
@@ -432,27 +679,34 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
     );
   }
 
+  const renderItem = heldAsset ?? currentItem!;
+  const renderKey =
+    heldAsset && renderItem.kind === "ASSET"
+      ? `held:${renderItem.assetId}:${renderItem.url}`
+      : currentKey;
+
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-black text-white">
-      {currentItem.kind === "SYNC_GAP" ? (
+      {renderItem.kind === "SYNC_GAP" ? (
         <div className="h-full w-full bg-black" aria-hidden="true" />
-      ) : currentItem.kind === "ASSET" ? (
-        currentItem.type === "VIDEO" ? (
+      ) : renderItem.kind === "ASSET" ? (
+        renderItem.type === "VIDEO" ? (
           <video
             ref={videoRef}
-            key={currentKey}
-            src={currentItem.url}
+            key={renderKey}
+            src={renderItem.url}
             autoPlay
             muted
             playsInline
+            preload="auto"
             loop={Boolean(playlist.sync)}
             onLoadedMetadata={(event) => seekLoadedWallVideo(event.currentTarget)}
             className="h-full w-full object-cover"
           />
         ) : (
           <Image
-            key={currentKey}
-            src={currentItem.url}
+            key={renderKey}
+            src={renderItem.url}
             alt=""
             fill
             unoptimized
@@ -462,7 +716,7 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
           />
         )
       ) : (
-        <CollectionWidget item={currentItem} token={token} />
+        <CollectionWidget item={renderItem} token={token} />
       )}
 
       <div className="pointer-events-none absolute right-4 top-4 flex items-center gap-2 rounded-full bg-black/55 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-white/70 backdrop-blur">
@@ -473,7 +727,9 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
         />
         {playlist.sync?.member
           ? `${playlist.sync.wallName} · ${playlist.device.label} · viewport ${playlist.sync.member.slotIndex + 1}`
-          : playlist.device.label}
+          : playlist.preload
+            ? `${playlist.preload.wallName} · pre-arming`
+            : playlist.device.label}
       </div>
     </main>
   );
