@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 
 export const SCREEN_NETWORK_MIGRATION =
-  "20260825101500_add_display_walls" as const;
+  "20260825133000_wall_resilience_hybrid" as const;
 
 type ReadinessRow = {
   creativePackageTable: boolean;
@@ -10,14 +10,24 @@ type ReadinessRow = {
   displayWallMemberTable: boolean;
   displayWallCreativeTable: boolean;
   displayWallCreativeTileTable: boolean;
+  displayWallReadinessTable: boolean;
+  displayWallRunTable: boolean;
   deviceTokenHashColumn: boolean;
   creativePackageIdColumn: boolean;
   displayWallCreativeIdColumn: boolean;
   campaignTargetWallIdColumn: boolean;
   scheduleDisplayWallIdColumn: boolean;
   playbackIdColumn: boolean;
+  wallHardResyncColumn: boolean;
+  wallPreloadLeadColumn: boolean;
+  wallStartGuardColumn: boolean;
+  wallFailurePolicyColumn: boolean;
+  wallCreativeModeColumn: boolean;
   creativePackageEnum: boolean;
   creativeDestinationEnum: boolean;
+  wallSceneModeEnum: boolean;
+  wallReadinessStatusEnum: boolean;
+  wallRunStatusEnum: boolean;
   creativePackagePlaylistValue: boolean;
   displayWallPlaylistValue: boolean;
   displayWallCampaignTargetValue: boolean;
@@ -40,54 +50,67 @@ export async function getScreenNetworkReadiness(): Promise<ScreenNetworkReadines
         to_regclass('public."DisplayWallMember"') IS NOT NULL AS "displayWallMemberTable",
         to_regclass('public."DisplayWallCreative"') IS NOT NULL AS "displayWallCreativeTable",
         to_regclass('public."DisplayWallCreativeTile"') IS NOT NULL AS "displayWallCreativeTileTable",
+        to_regclass('public."DisplayWallReadinessAck"') IS NOT NULL AS "displayWallReadinessTable",
+        to_regclass('public."DisplayWallRun"') IS NOT NULL AS "displayWallRunTable",
         EXISTS (
-          SELECT 1
-          FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'Screen'
-            AND column_name = 'deviceTokenHash'
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'Screen' AND column_name = 'deviceTokenHash'
         ) AS "deviceTokenHashColumn",
         EXISTS (
-          SELECT 1
-          FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'PlaylistItem'
-            AND column_name = 'creativePackageId'
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'PlaylistItem' AND column_name = 'creativePackageId'
         ) AS "creativePackageIdColumn",
         EXISTS (
-          SELECT 1
-          FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'PlaylistItem'
-            AND column_name = 'displayWallCreativeId'
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'PlaylistItem' AND column_name = 'displayWallCreativeId'
         ) AS "displayWallCreativeIdColumn",
         EXISTS (
-          SELECT 1
-          FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'CampaignTarget'
-            AND column_name = 'wallId'
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'CampaignTarget' AND column_name = 'wallId'
         ) AS "campaignTargetWallIdColumn",
         EXISTS (
-          SELECT 1
-          FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'ScheduleWindow'
-            AND column_name = 'displayWallId'
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'ScheduleWindow' AND column_name = 'displayWallId'
         ) AS "scheduleDisplayWallIdColumn",
         EXISTS (
-          SELECT 1
-          FROM information_schema.columns
-          WHERE table_schema = 'public'
-            AND table_name = 'ProofOfPlayLog'
-            AND column_name = 'playbackId'
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'ProofOfPlayLog' AND column_name = 'playbackId'
         ) AS "playbackIdColumn",
+        EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'DisplayWall' AND column_name = 'hardResyncMs'
+        ) AS "wallHardResyncColumn",
+        EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'DisplayWall' AND column_name = 'preloadLeadSec'
+        ) AS "wallPreloadLeadColumn",
+        EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'DisplayWall' AND column_name = 'startGuardMs'
+        ) AS "wallStartGuardColumn",
+        EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'DisplayWall' AND column_name = 'failurePolicy'
+        ) AS "wallFailurePolicyColumn",
+        EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'DisplayWallCreative' AND column_name = 'mode'
+        ) AS "wallCreativeModeColumn",
         EXISTS (
           SELECT 1 FROM pg_type WHERE typname = 'CreativePackageStatus'
         ) AS "creativePackageEnum",
         EXISTS (
           SELECT 1 FROM pg_type WHERE typname = 'CreativeDestination'
         ) AS "creativeDestinationEnum",
+        EXISTS (
+          SELECT 1 FROM pg_type WHERE typname = 'DisplayWallSceneMode'
+        ) AS "wallSceneModeEnum",
+        EXISTS (
+          SELECT 1 FROM pg_type WHERE typname = 'DisplayWallReadinessStatus'
+        ) AS "wallReadinessStatusEnum",
+        EXISTS (
+          SELECT 1 FROM pg_type WHERE typname = 'DisplayWallRunStatus'
+        ) AS "wallRunStatusEnum",
         EXISTS (
           SELECT 1
           FROM pg_enum
