@@ -10,13 +10,19 @@ const syncMath = read("lib/wall-sync.ts");
 const resilience = read("lib/wall-resilience.ts");
 const playerPlaylist = read("app/api/v1/screens/[deviceId]/playlist/route.ts");
 const wallReadiness = read("app/api/v1/screens/[deviceId]/wall-readiness/route.ts");
+const wallTelemetry = read("app/api/v1/screens/[deviceId]/wall-telemetry/route.ts");
+const wallStatus = read("app/api/admin/display-walls/[id]/status/route.ts");
 const player = read("components/player/SignagePlayer.tsx");
+const wallDashboard = read("components/admin/WallOperationsOverview.tsx");
 const wallApi = read("app/api/admin/display-walls/route.ts");
 const wallMembersApi = read("app/api/admin/display-walls/[id]/members/route.ts");
 const wallCreativeApi = read("app/api/admin/display-walls/[id]/creatives/route.ts");
 const campaignApi = read("app/api/admin/campaigns/route.ts");
 const publishApi = read("app/api/admin/campaigns/[id]/publish/route.ts");
 const readiness = read("lib/screen-network-readiness.ts");
+const nativeCache = read("native-player/android/app/src/main/java/com/gspan/player/PersistentMediaCache.kt");
+const nativeClient = read("native-player/android/app/src/main/java/com/gspan/player/WallControlPlaneClient.kt");
+const nativeMonitor = read("native-player/android/app/src/main/java/com/gspan/player/WallRuntimeMonitor.kt");
 
 const checks = [
   ["DisplayWall model", schema.includes("model DisplayWall")],
@@ -47,6 +53,8 @@ const checks = [
   ["Future shared release helper", resilience.includes("wallReleaseAt")],
   ["Per-screen readiness ACK model", schema.includes("model DisplayWallReadinessAck")],
   ["Shared wall run model", schema.includes("model DisplayWallRun")],
+  ["Current wall telemetry model", schema.includes("model DisplayWallTelemetry")],
+  ["Telemetry distinguishes local-file playback", schema.includes("DisplayWallPlaybackTransport") && schema.includes("LOCAL_FILE") && schema.includes("BROWSER_CACHE")],
   ["Readiness endpoint validates manifest version", wallReadiness.includes("expectedManifestVersion")],
   ["Wall run arms only when all members ready", wallReadiness.includes("readyCount === memberCount") && wallReadiness.includes('status: "ARMED"')],
   ["Wall run blocks preload failure", wallReadiness.includes('status: "BLOCKED"')],
@@ -63,6 +71,19 @@ const checks = [
   ["Player performs tiered drift correction", player.includes("driftCorrection")],
   ["Wall player does not use local advance timer", player.includes("if (!currentItem || !token || playlist?.sync) return")],
   ["Hold-last-ready renders only previously loaded media", player.includes("lastReadyAsset") && player.includes("onCanPlay") && player.includes("onLoad")],
+  ["Authenticated telemetry endpoint", wallTelemetry.includes("requestHasValidDeviceToken") && wallTelemetry.includes("displayWallTelemetry.upsert")],
+  ["Telemetry rejects non-member devices", wallTelemetry.includes("not assigned to the requested display wall")],
+  ["Live wall status reports worst drift", wallStatus.includes("worstDriftMs") && wallStatus.includes("localFileCount")],
+  ["Wall operations dashboard polls live status", wallDashboard.includes("setTimeout(refresh, 5_000)") && wallDashboard.includes("Local files")],
+  ["Dashboard identifies production-safe LOCAL_FILE", wallDashboard.includes("LOCAL_FILE is the production-safe state")],
+  ["Native cache uses persistent app storage", nativeCache.includes("context.filesDir") && nativeCache.includes("gspan-media")],
+  ["Native cache uses atomic partial-file promotion", nativeCache.includes(".part") && nativeCache.includes("fd.sync()") && nativeCache.includes("renameTo")],
+  ["Native manifest has READY sentinel", nativeCache.includes("READY_SENTINEL") && nativeCache.includes("manifestReady")],
+  ["Native playback resolves local file URI", nativeCache.includes("Uri.fromFile") && nativeCache.includes("localUri")],
+  ["Native client reports readiness", nativeClient.includes("wall-readiness") && nativeClient.includes("prepareAndAcknowledge")],
+  ["Native client reports telemetry", nativeClient.includes("wall-telemetry") && nativeClient.includes('transport: String = "LOCAL_FILE"')],
+  ["Native runtime emits periodic snapshots", nativeMonitor.includes("scheduleWithFixedDelay") && nativeMonitor.includes("reportTelemetry")],
+  ["Native runtime counts failover and hard resync", nativeMonitor.includes("sourceFailovers") && nativeMonitor.includes("hardResyncs")],
   ["Wall admin creation API", wallApi.includes("buildDisplayWallTopology")],
   ["Topology replacement invalidates tiles", wallMembersApi.includes('status: "PROCESSING"')],
   ["Logical master is optional", wallCreativeApi.includes("masterUrl: z.string().url().optional().nullable()")],
@@ -70,7 +91,7 @@ const checks = [
   ["Wall campaign creation", campaignApi.includes("displayWallCreativeId") && campaignApi.includes('type: "WALL"')],
   ["Wall schedule materialization", publishApi.includes("displayWallId") && publishApi.includes("displayWallMember")],
   ["Player receives wall viewport geometry", playerPlaylist.includes("slotIndex") && playerPlaylist.includes("canvasWidth")],
-  ["Wall resilience readiness checkpoint", readiness.includes("displayWallReadinessTable") && readiness.includes("wallSceneModeEnum")],
+  ["Wall telemetry readiness checkpoint", readiness.includes("displayWallTelemetryTable") && readiness.includes("wallPlaybackTransportEnum")],
 ];
 
 let failed = 0;
