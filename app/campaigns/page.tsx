@@ -17,14 +17,23 @@ export default async function CampaignsPage() {
       <AdminShell
         active="campaigns"
         title="Campaigns"
-        description="Schedule playlists, individual assets or adaptive Factory packages."
+        description="Schedule playlists, individual assets, adaptive packages or synchronized wall scenes."
       >
         <SchemaPendingNotice readiness={readiness} />
       </AdminShell>
     );
   }
 
-  const [campaigns, playlists, assets, creativePackages, screens, groups] = await Promise.all([
+  const [
+    campaigns,
+    playlists,
+    assets,
+    creativePackages,
+    screens,
+    groups,
+    walls,
+    wallCreatives,
+  ] = await Promise.all([
     prisma.campaign.findMany({
       orderBy: [{ startAt: "desc" }, { createdAt: "desc" }],
       include: { playlist: true, targets: true },
@@ -46,13 +55,23 @@ export default async function CampaignsPage() {
       orderBy: { createdAt: "asc" },
       include: { members: true },
     }),
+    prisma.displayWall.findMany({
+      orderBy: { createdAt: "asc" },
+      include: { members: true },
+    }),
+    prisma.displayWallCreative.findMany({
+      where: { status: "READY" },
+      orderBy: { createdAt: "desc" },
+      include: { wall: true },
+      take: 100,
+    }),
   ]);
 
   return (
     <AdminShell
       active="campaigns"
       title="Campaigns"
-      description="Schedule playlists, individual assets or adaptive Factory packages."
+      description="Schedule playlists and shared wall scenes against individual screens, groups or synchronized display walls."
     >
       <CampaignsPanel
         initialCampaigns={serialize(campaigns)}
@@ -61,6 +80,8 @@ export default async function CampaignsPage() {
         creativePackages={serialize(creativePackages)}
         screens={serialize(screens)}
         groups={serialize(groups)}
+        walls={serialize(walls)}
+        wallCreatives={serialize(wallCreatives)}
       />
     </AdminShell>
   );
