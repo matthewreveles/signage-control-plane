@@ -10,12 +10,29 @@ type Asset = {
   masterUrl: string;
 };
 
+type WallCreative = {
+  id: string;
+  name: string;
+  type: "IMAGE" | "VIDEO";
+  durationSec: number | null;
+  masterWidth: number;
+  masterHeight: number;
+  wall: {
+    id: string;
+    name: string;
+    canvasWidth: number;
+    canvasHeight: number;
+  };
+};
+
 type StoredItem = {
   id: string;
   kind: string;
   assetId: string | null;
+  displayWallCreativeId: string | null;
   durationSec: number | null;
   asset: Asset | null;
+  displayWallCreative: WallCreative | null;
 };
 
 type Playlist = {
@@ -24,37 +41,72 @@ type Playlist = {
   items: StoredItem[];
 };
 
-type EditorItem = {
-  key: string;
-  assetId: string;
-  durationSec: number;
-};
+type EditorItem =
+  | {
+      key: string;
+      kind: "ASSET";
+      assetId: string;
+      durationSec: number;
+    }
+  | {
+      key: string;
+      kind: "DISPLAY_WALL";
+      displayWallCreativeId: string;
+      durationSec: number;
+    };
 
 function editorItemsFor(playlist: Playlist): EditorItem[] {
-  return playlist.items
-    .filter((item) => item.kind === "ASSET" && item.assetId)
-    .map((item) => ({
-      key: item.id,
-      assetId: item.assetId!,
-      durationSec: item.durationSec ?? 10,
-    }));
+  return playlist.items.flatMap((item) => {
+    if (item.kind === "ASSET" && item.assetId) {
+      return [
+        {
+          key: item.id,
+          kind: "ASSET" as const,
+          assetId: item.assetId,
+          durationSec: item.durationSec ?? 10,
+        },
+      ];
+    }
+
+    if (item.kind === "DISPLAY_WALL" && item.displayWallCreativeId) {
+      return [
+        {
+          key: item.id,
+          kind: "DISPLAY_WALL" as const,
+          displayWallCreativeId: item.displayWallCreativeId,
+          durationSec:
+            item.durationSec ?? item.displayWallCreative?.durationSec ?? 10,
+        },
+      ];
+    }
+
+    return [];
+  });
+}
+
+function isEditorSupported(playlist: Playlist | null) {
+  return (
+    !playlist ||
+    playlist.items.every(
+      (item) => item.kind === "ASSET" || item.kind === "DISPLAY_WALL",
+    )
+  );
 }
 
 export default function PlaylistsPanel({
   initialPlaylists,
   assets,
+  wallCreatives,
 }: {
   initialPlaylists: Playlist[];
   assets: Asset[];
+  wallCreatives: WallCreative[];
 }) {
   const [playlists, setPlaylists] = useState(initialPlaylists);
 
   const first = initialPlaylists[0] ?? null;
 
-  const [selectedId, setSelectedId] = useState<string | null>(
-    first?.id ?? null,
-  );
-
+  const [selectedId, setSelectedId] = useState<string | null>(first?.id ?? null);
   const [name, setName] = useState(first?.name ?? "");
   const [items, setItems] = useState<EditorItem[]>(
     first ? editorItemsFor(first) : [],
@@ -64,14 +116,13 @@ export default function PlaylistsPanel({
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [assetToAdd, setAssetToAdd] = useState(assets[0]?.id ?? "");
+  const [wallCreativeToAdd, setWallCreativeToAdd] = useState(
+    wallCreatives[0]?.id ?? "",
+  );
   const [dragIndex, setDragIndex] = useState<number | null>(null);
 
   const selectedPlaylist = playlists.find((p) => p.id === selectedId) ?? null;
-
-  const selectedEditable =
-    isNew ||
-    !selectedPlaylist ||
-    selectedPlaylist.items.every((item) => item.kind === "ASSET");
+  const selectedEditable = isNew || isEditorSupported(selectedPlaylist);
 
   const totalSeconds = useMemo(
     () => items.reduce((sum, item) => sum + item.durationSec, 0),
@@ -81,6 +132,10 @@ export default function PlaylistsPanel({
   const assetMap = useMemo(
     () => new Map(assets.map((asset) => [asset.id, asset])),
     [assets],
+  );
+  const wallCreativeMap = useMemo(
+    () => new Map(wallCreatives.map((creative) => [creative.id, creative])),
+    [wallCreatives],
   );
 
   function selectPlaylist(playlist: Playlist) {
@@ -106,8 +161,24 @@ export default function PlaylistsPanel({
       ...prev,
       {
         key: crypto.randomUUID(),
+        kind: "ASSET",
         assetId: assetToAdd,
         durationSec: 10,
+      },
+    ]);
+  }
+
+  function addWallCreative() {
+    if (!wallCreativeToAdd) return;
+    const creative = wallCreativeMap.get(wallCreativeToAdd);
+
+    setItems((prev) => [
+      ...prev,
+      {
+        key: crypto.randomUUID(),
+        kind: "DISPLAY_WALL",
+        displayWallCreativeId: wallCreativeToAdd,
+        durationSec: creative?.durationSec ?? 10,
       },
     ]);
   }
@@ -156,10 +227,19 @@ export default function PlaylistsPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: name.trim(),
-          items: items.map((item) => ({
-            assetId: item.assetId,
-            durationSec: item.durationSec,
-          })),
+          items: items.map((item) =>
+            item.kind === "DISPLAY_WALL"
+              ? {
+                  kind: "DISPLAY_WALL",
+                  displayWallCreativeId: item.displayWallCreativeId,
+                  durationSec: item.durationSec,
+                }
+              : {
+                  kind: "ASSET",
+                  assetId: item.assetId,
+                  durationSec: item.durationSec,
+                },
+          ),
         }),
       });
 
@@ -223,9 +303,7 @@ export default function PlaylistsPanel({
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="font-semibold">Playlists</h2>
-            <p className="text-xs text-zinc-500">
-              {playlists.length} saved
-            </p>
+            <p className="text-xs text-zinc-500">{playlists.length} saved</p>
           </div>
 
           <button
@@ -239,9 +317,10 @@ export default function PlaylistsPanel({
 
         <div className="mt-4 grid gap-2">
           {playlists.map((playlist) => {
-            const assetOnly = playlist.items.every(
-              (item) => item.kind === "ASSET",
-            );
+            const supported = isEditorSupported(playlist);
+            const wallCount = playlist.items.filter(
+              (item) => item.kind === "DISPLAY_WALL",
+            ).length;
 
             return (
               <button
@@ -257,7 +336,8 @@ export default function PlaylistsPanel({
                 <div className="font-semibold">{playlist.name}</div>
                 <div className="mt-1 text-xs text-zinc-500">
                   {playlist.items.length} item(s)
-                  {!assetOnly ? " · mixed content" : ""}
+                  {wallCount ? ` · ${wallCount} wall scene(s)` : ""}
+                  {!supported ? " · advanced content" : ""}
                 </div>
               </button>
             );
@@ -275,9 +355,7 @@ export default function PlaylistsPanel({
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex-1">
             <label className="grid gap-1">
-              <span className="text-xs font-medium text-zinc-500">
-                Playlist name
-              </span>
+              <span className="text-xs font-medium text-zinc-500">Playlist name</span>
               <input
                 value={name}
                 onChange={(event) => setName(event.target.value)}
@@ -316,23 +394,21 @@ export default function PlaylistsPanel({
 
         {!selectedEditable ? (
           <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-            This playlist contains package or structured-content items. The
-            first Playlist Builder only edits asset-only playlists so we do not
-            accidentally destroy those richer entries.
+            This playlist contains adaptive package or structured-content items. The visual editor leaves those richer entries untouched rather than flattening them accidentally.
           </div>
         ) : (
           <>
-            <div className="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                <label className="grid flex-1 gap-1">
-                  <span className="text-xs font-medium text-zinc-500">
-                    Add asset
-                  </span>
-
+            <div className="mt-6 grid gap-4 rounded-xl border border-zinc-200 bg-zinc-50 p-4 xl:grid-cols-2">
+              <div className="rounded-xl border border-zinc-200 bg-white p-4">
+                <div className="text-sm font-semibold">Standard screen asset</div>
+                <div className="mt-1 text-xs text-zinc-500">
+                  Plays the same ordinary asset on every targeted screen.
+                </div>
+                <div className="mt-3 flex gap-2">
                   <select
                     value={assetToAdd}
                     onChange={(event) => setAssetToAdd(event.target.value)}
-                    className="h-10 rounded-xl border border-zinc-300 bg-white px-3 text-sm"
+                    className="h-10 min-w-0 flex-1 rounded-xl border border-zinc-300 bg-white px-3 text-sm"
                   >
                     {assets.map((asset) => (
                       <option key={asset.id} value={asset.id}>
@@ -340,22 +416,58 @@ export default function PlaylistsPanel({
                       </option>
                     ))}
                   </select>
-                </label>
+                  <button
+                    type="button"
+                    onClick={addAsset}
+                    disabled={!assetToAdd}
+                    className="h-10 rounded-xl bg-zinc-900 px-4 text-sm font-semibold text-white hover:bg-zinc-800 disabled:opacity-40"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
 
-                <button
-                  type="button"
-                  onClick={addAsset}
-                  disabled={!assetToAdd}
-                  className="h-10 rounded-xl bg-zinc-900 px-4 text-sm font-semibold text-white hover:bg-zinc-800 disabled:opacity-40"
-                >
-                  Add to playlist
-                </button>
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+                <div className="text-sm font-semibold text-emerald-950">Shared wall creative</div>
+                <div className="mt-1 text-xs text-emerald-800">
+                  Each wall member receives its own synchronized tile from one logical canvas.
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <select
+                    value={wallCreativeToAdd}
+                    onChange={(event) => setWallCreativeToAdd(event.target.value)}
+                    className="h-10 min-w-0 flex-1 rounded-xl border border-emerald-300 bg-white px-3 text-sm"
+                  >
+                    {wallCreatives.map((creative) => (
+                      <option key={creative.id} value={creative.id}>
+                        {creative.wall.name} · {creative.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={addWallCreative}
+                    disabled={!wallCreativeToAdd}
+                    className="h-10 rounded-xl bg-emerald-700 px-4 text-sm font-semibold text-white hover:bg-emerald-800 disabled:opacity-40"
+                  >
+                    Add
+                  </button>
+                </div>
+                {!wallCreatives.length ? (
+                  <div className="mt-3 text-xs text-emerald-900">
+                    No READY wall creative manifests have been imported yet.
+                  </div>
+                ) : null}
               </div>
             </div>
 
             <div className="mt-5 grid gap-3">
               {items.map((item, index) => {
-                const asset = assetMap.get(item.assetId);
+                const asset = item.kind === "ASSET" ? assetMap.get(item.assetId) : null;
+                const wallCreative =
+                  item.kind === "DISPLAY_WALL"
+                    ? wallCreativeMap.get(item.displayWallCreativeId)
+                    : null;
 
                 return (
                   <div
@@ -364,9 +476,7 @@ export default function PlaylistsPanel({
                     onDragStart={() => setDragIndex(index)}
                     onDragOver={(event) => event.preventDefault()}
                     onDrop={() => {
-                      if (dragIndex !== null) {
-                        moveItem(dragIndex, index);
-                      }
+                      if (dragIndex !== null) moveItem(dragIndex, index);
                       setDragIndex(null);
                     }}
                     className="grid gap-3 rounded-xl border border-zinc-200 bg-white p-4 sm:grid-cols-[40px_1fr_130px_auto] sm:items-center"
@@ -379,12 +489,23 @@ export default function PlaylistsPanel({
                     </div>
 
                     <div>
-                      <div className="font-semibold">
-                        {asset?.name ?? "Unknown asset"}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="font-semibold">
+                          {item.kind === "DISPLAY_WALL"
+                            ? wallCreative?.name ?? "Unknown wall creative"
+                            : asset?.name ?? "Unknown asset"}
+                        </div>
+                        {item.kind === "DISPLAY_WALL" ? (
+                          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-800">
+                            Wall
+                          </span>
+                        ) : null}
                       </div>
                       <div className="text-xs text-zinc-500">
-                        #{index + 1} · {asset?.orientation ?? "—"} ·{" "}
-                        {asset?.type ?? "—"}
+                        #{index + 1} ·{" "}
+                        {item.kind === "DISPLAY_WALL"
+                          ? `${wallCreative?.wall.name ?? "wall"} · ${wallCreative?.masterWidth ?? "—"}×${wallCreative?.masterHeight ?? "—"} logical canvas`
+                          : `${asset?.orientation ?? "—"} · ${asset?.type ?? "—"}`}
                       </div>
                     </div>
 
@@ -440,16 +561,14 @@ export default function PlaylistsPanel({
 
               {!items.length ? (
                 <div className="rounded-xl border border-dashed border-zinc-300 p-10 text-center text-sm text-zinc-500">
-                  Add assets above to build this rotation.
+                  Add standard assets or shared wall creative above to build this rotation.
                 </div>
               ) : null}
             </div>
           </>
         )}
 
-        {message ? (
-          <div className="mt-4 text-sm text-zinc-600">{message}</div>
-        ) : null}
+        {message ? <div className="mt-4 text-sm text-zinc-600">{message}</div> : null}
       </div>
     </section>
   );
