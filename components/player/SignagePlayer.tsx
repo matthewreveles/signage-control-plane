@@ -81,8 +81,11 @@ type WallPreloadPlan = {
   occurrenceKey: string;
   manifestVersion: string;
   scheduledStartAt: string;
+  scheduledStartEpochMs?: number;
   scheduledEndAt: string;
+  scheduledEndEpochMs?: number;
   releaseAt: string | null;
+  releaseEpochMs?: number | null;
   runStatus: "PREPARING" | "ARMED" | "RUNNING" | "BLOCKED" | "COMPLETE";
   failurePolicy: "HOLD_LAST_READY" | "FALLBACK_STANDARD";
   requireAllMembersReady: boolean;
@@ -90,9 +93,19 @@ type WallPreloadPlan = {
     assetId: string;
     url: string;
     fallbackUrls: string[];
+    expectedBytes?: number | null;
     type: "IMAGE" | "VIDEO";
     sourceKind: "ASSET" | "CREATIVE_PACKAGE" | "DISPLAY_WALL";
     sceneMode: "SPAN" | "INDEPENDENT" | null;
+  }>;
+  timeline?: Array<{
+    kind: "ASSET" | "SYNC_GAP";
+    assetId?: string;
+    type?: "IMAGE" | "VIDEO";
+    sourceKind?: "ASSET" | "CREATIVE_PACKAGE" | "DISPLAY_WALL";
+    sceneMode?: "SPAN" | "INDEPENDENT" | null;
+    durationSeconds: number;
+    reason?: string;
   }>;
 };
 
@@ -122,6 +135,8 @@ type ProofEvent = {
   durationSec: number;
 };
 
+type CorrectionMode = "NONE" | "SOFT" | "HARD";
+
 function headers(token: string) {
   return { Authorization: `Bearer ${token}` };
 }
@@ -149,6 +164,26 @@ async function sendProof(deviceId: string, token: string, events: ProofEvent[]) 
     headers: { ...headers(token), "Content-Type": "application/json" },
     body: JSON.stringify({ events }),
   });
+  return response.ok;
+}
+
+async function sendWallTelemetry({
+  deviceId,
+  token,
+  payload,
+}: {
+  deviceId: string;
+  token: string;
+  payload: Record<string, unknown>;
+}) {
+  const response = await fetch(
+    `/api/v1/screens/${encodeURIComponent(deviceId)}/wall-telemetry`,
+    {
+      method: "POST",
+      headers: { ...headers(token), "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
   return response.ok;
 }
 
@@ -323,6 +358,13 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
   const clockSamplesRef = useRef<ClockSample[]>([]);
   const preloadVersionRef = useRef<string | null>(null);
   const preloadedUrlRef = useRef<Map<string, string>>(new Map());
+  const browserReadyManifestRef = useRef<string | null>(null);
+  const cachedAssetCountRef = useRef(0);
+  const lastDriftMsRef = useRef<number | null>(null);
+  const correctionModeRef = useRef<CorrectionMode>("NONE");
+  const sourceFailoversRef = useRef(0);
+  const hardResyncsRef = useRef(0);
+  const lastHardResyncAtRef = useRef(0);
 
   useEffect(() => {
     const stored = window.localStorage.getItem(`gspan-screen-token:${deviceId}`);
@@ -402,6 +444,8 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
     const preload: WallPreloadPlan = preloadPlan;
     let cancelled = false;
     preloadVersionRef.current = preloadVersion;
+    browserReadyManifestRef.current = null;
+    cachedAssetCountRef.current = 0;
 
     async function arm() {
       let retry = 0;
@@ -422,6 +466,7 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
           for (const asset of uniqueAssets) {
             if (cancelled) return;
             const resolvedUrl = await preloadAsset(asset);
+            if (resolvedUrl !== asset.url) sourceFailoversRef.current += 1;
             preloadedUrlRef.current.set(asset.assetId, resolvedUrl);
           }
 
@@ -433,6 +478,8 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
             preload,
             status: "READY",
           });
+          browserReadyManifestRef.current = preload.manifestVersion;
+          cachedAssetCountRef.current = uniqueAssets.length;
           return;
         } catch (error) {
           if (cancelled) return;
@@ -498,6 +545,8 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
       const expectedItem = playlist.items[position.index];
       const video = videoRef.current;
       if (!video || expectedItem?.kind !== "ASSET" || expectedItem.type !== "VIDEO") {
+        lastDriftMsRef.current = null;
+        correctionModeRef.current = "NONE";
         return;
       }
 
@@ -516,7 +565,15 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
         hardResyncMs: sync.hardResyncMs,
       });
 
+      lastDriftMsRef.current = Math.max(-60_000, Math.min(60_000, Math.round(signedDriftMs)));
+      correctionModeRef.current = correction.mode;
+
       if (correction.mode === "HARD") {
+        const hardNow = monotonicEpochNowMs();
+        if (hardNow - lastHardResyncAtRef.current > 1_000) {
+          hardResyncsRef.current += 1;
+          lastHardResyncAtRef.current = hardNow;
+        }
         try {
           video.playbackRate = 1;
           video.currentTime = expectedSeconds;
@@ -539,6 +596,63 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
 
   const currentItem = playlist?.items[currentIndex] ?? null;
   const currentKey = itemKey(currentItem, currentIndex);
+
+  useEffect(() => {
+    const sync = playlist?.sync;
+    if (!sync || !token) return;
+    let cancelled = false;
+
+    async function report() {
+      const activeItem = playlist?.items[currentIndex] ?? null;
+      const preloadForRun =
+        playlist?.preload?.wallId === sync.wallId ? playlist.preload : null;
+      const manifestReady =
+        Boolean(sync.manifestVersion) &&
+        browserReadyManifestRef.current === sync.manifestVersion;
+      const browserCached =
+        activeItem?.kind === "ASSET" &&
+        manifestReady &&
+        preloadedUrlRef.current.has(activeItem.assetId);
+
+      await sendWallTelemetry({
+        deviceId,
+        token: token as string,
+        payload: {
+          wallId: sync.wallId,
+          campaignId: preloadForRun?.campaignId ?? null,
+          occurrenceKey: preloadForRun?.occurrenceKey ?? null,
+          manifestVersion: sync.manifestVersion,
+          sceneMode:
+            activeItem?.kind === "ASSET" ? activeItem.sceneMode ?? null : null,
+          currentAssetId:
+            activeItem?.kind === "ASSET" ? activeItem.assetId : null,
+          currentItemIndex: currentIndex,
+          driftMs: lastDriftMsRef.current,
+          clockOffsetMs: Math.round(clockOffsetMs),
+          correctionMode: correctionModeRef.current,
+          transport: browserCached ? "BROWSER_CACHE" : "NETWORK",
+          cacheReady: manifestReady,
+          cachedAssets: cachedAssetCountRef.current,
+          cacheBytesMb: 0,
+          storageFreeMb: null,
+          sourceFailovers: sourceFailoversRef.current,
+          hardResyncs: hardResyncsRef.current,
+          playerVersion: "browser-reference",
+          lastError: null,
+        },
+      }).catch(() => false);
+    }
+
+    void report();
+    const interval = window.setInterval(() => {
+      if (!cancelled) void report();
+    }, 5_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [clockOffsetMs, currentIndex, deviceId, playlist, token]);
 
   useEffect(() => {
     setMediaUrlOverride(null);
@@ -648,6 +762,7 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
     const next =
       candidates[candidateIndex + 1] ?? candidates.find((url) => url !== currentUrl);
     if (next) {
+      sourceFailoversRef.current += 1;
       preloadedUrlRef.current.set(asset.assetId, next);
       setMediaUrlOverride(next);
     }
