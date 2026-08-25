@@ -1,6 +1,7 @@
 import AdminShell from "@/components/admin/AdminShell";
 import DisplayWallsPanel from "@/components/admin/DisplayWallsPanel";
 import SchemaPendingNotice from "@/components/admin/SchemaPendingNotice";
+import WallOperationsOverview from "@/components/admin/WallOperationsOverview";
 import { prisma } from "@/lib/prisma";
 import { getScreenNetworkReadiness } from "@/lib/screen-network-readiness";
 import { serialize } from "@/lib/serialize";
@@ -74,6 +75,9 @@ export default async function DisplayWallsPage() {
       title="Display walls"
       description="Map screens in physical order and expose one logical canvas for shared creative."
     >
+      <WallOperationsOverview
+        walls={walls.map((wall) => ({ id: wall.id, name: wall.name }))}
+      />
       <DisplayWallsPanel
         initialWalls={serialize(walls)}
         screens={serialize(screens)}
