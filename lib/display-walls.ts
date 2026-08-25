@@ -7,6 +7,13 @@ export const displayWallSettingsSchema = z.object({
   columns: z.number().int().min(1).max(100).default(1),
   timezone: z.string().trim().min(1).max(120).default("America/Phoenix"),
   syncToleranceMs: z.number().int().min(16).max(1000).default(80),
+  hardResyncMs: z.number().int().min(50).max(5000).default(350),
+  preloadLeadSec: z.number().int().min(30).max(86400).default(300),
+  startGuardMs: z.number().int().min(1000).max(60000).default(5000),
+  requireAllMembersReady: z.boolean().default(true),
+  failurePolicy: z
+    .enum(["HOLD_LAST_READY", "FALLBACK_STANDARD"])
+    .default("HOLD_LAST_READY"),
 });
 
 export const displayWallMemberInputSchema = z.object({
