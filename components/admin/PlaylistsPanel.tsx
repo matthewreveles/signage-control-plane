@@ -56,12 +56,12 @@ type EditorItem =
     };
 
 function editorItemsFor(playlist: Playlist): EditorItem[] {
-  return playlist.items.flatMap((item) => {
+  return playlist.items.flatMap<EditorItem>((item) => {
     if (item.kind === "ASSET" && item.assetId) {
       return [
         {
           key: item.id,
-          kind: "ASSET" as const,
+          kind: "ASSET",
           assetId: item.assetId,
           durationSec: item.durationSec ?? 10,
         },
@@ -72,7 +72,7 @@ function editorItemsFor(playlist: Playlist): EditorItem[] {
       return [
         {
           key: item.id,
-          kind: "DISPLAY_WALL" as const,
+          kind: "DISPLAY_WALL",
           displayWallCreativeId: item.displayWallCreativeId,
           durationSec:
             item.durationSec ?? item.displayWallCreative?.durationSec ?? 10,
