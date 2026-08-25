@@ -2,6 +2,7 @@ import Link from "next/link";
 
 const navigation = [
   { key: "screens", label: "Screens", href: "/" },
+  { key: "walls", label: "Display walls", href: "/walls" },
   { key: "packages", label: "Creative packages", href: "/packages" },
   { key: "assets", label: "Assets", href: "/assets" },
   { key: "playlists", label: "Playlists", href: "/playlists" },
