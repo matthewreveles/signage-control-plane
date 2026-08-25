@@ -63,6 +63,14 @@ export async function POST(request: Request) {
   }
 
   const { members, ...settings } = parsed.data;
+
+  if (settings.hardResyncMs <= settings.syncToleranceMs) {
+    return NextResponse.json(
+      { error: "hardResyncMs must be greater than syncToleranceMs." },
+      { status: 400 },
+    );
+  }
+
   const screenIds = [...new Set(members.map((member) => member.screenId))];
 
   const screens = screenIds.length
@@ -103,6 +111,11 @@ export async function POST(request: Request) {
       columns: settings.columns,
       timezone: settings.timezone,
       syncToleranceMs: settings.syncToleranceMs,
+      hardResyncMs: settings.hardResyncMs,
+      preloadLeadSec: settings.preloadLeadSec,
+      startGuardMs: settings.startGuardMs,
+      requireAllMembersReady: settings.requireAllMembersReady,
+      failurePolicy: settings.failurePolicy,
       canvasWidth: topology.canvasWidth,
       canvasHeight: topology.canvasHeight,
       members: {
