@@ -395,10 +395,11 @@ export default function SignagePlayer({ deviceId }: { deviceId: string }) {
   const preloadVersion = playlist?.preload?.manifestVersion ?? null;
 
   useEffect(() => {
-    const preload = playlist?.preload;
-    if (!token || !preload || !preloadVersion) return;
+    const preloadPlan = playlist?.preload;
+    if (!token || !preloadPlan || !preloadVersion) return;
     if (preloadVersionRef.current === preloadVersion) return;
 
+    const preload: WallPreloadPlan = preloadPlan;
     let cancelled = false;
     preloadVersionRef.current = preloadVersion;
 
