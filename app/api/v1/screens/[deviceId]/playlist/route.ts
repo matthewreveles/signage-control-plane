@@ -23,6 +23,7 @@ type PreloadAsset = {
   assetId: string;
   url: string;
   fallbackUrls: string[];
+  expectedBytes: number | null;
   type: "IMAGE" | "VIDEO";
   sourceKind: "ASSET" | "CREATIVE_PACKAGE" | "DISPLAY_WALL";
   sceneMode: "SPAN" | "INDEPENDENT" | null;
@@ -249,6 +250,7 @@ export async function GET(req: Request, ctx: Ctx) {
                     tile.asset.masterUrl,
                     tile.asset.renditions,
                   ),
+                  expectedBytes: rendition?.filesize ?? null,
                   type: tile.asset.type,
                   sourceKind: "DISPLAY_WALL",
                   sceneMode: creative.mode,
@@ -275,6 +277,7 @@ export async function GET(req: Request, ctx: Ctx) {
                       assetId: selected.asset.id,
                       url: selected.asset.masterUrl,
                       fallbackUrls: [],
+                      expectedBytes: null,
                       type: selected.asset.type,
                       sourceKind: "CREATIVE_PACKAGE",
                       sceneMode: null,
@@ -300,6 +303,7 @@ export async function GET(req: Request, ctx: Ctx) {
                   assetId: asset.id,
                   url,
                   fallbackUrls: redundantUrls(url, asset.masterUrl, asset.renditions),
+                  expectedBytes: rendition?.filesize ?? null,
                   type: asset.type,
                   sourceKind: "ASSET",
                   sceneMode: null,
@@ -310,6 +314,97 @@ export async function GET(req: Request, ctx: Ctx) {
             return [];
           });
 
+          const timeline = schedule.playlist.items.map((playlistItem) => {
+            if (playlistItem.kind === "COLLECTION_WIDGET") {
+              return syncGap(
+                playlistItem.durationSec ?? 15,
+                "Dynamic collection requires live network",
+              );
+            }
+
+            if (playlistItem.kind === "DISPLAY_WALL") {
+              const creative = playlistItem.displayWallCreative;
+              const durationSeconds =
+                creative?.type === "VIDEO"
+                  ? creative.durationSec ?? playlistItem.durationSec ?? 15
+                  : playlistItem.durationSec ?? 10;
+
+              if (!creative || creative.status !== "READY" || creative.wallId !== wall.id) {
+                return syncGap(durationSeconds, "Wall scene unavailable");
+              }
+
+              const tile = creative.tiles.find(
+                (candidate) => candidate.member.screenId === screen.id,
+              );
+              if (!tile || tile.asset.status !== "READY") {
+                return syncGap(durationSeconds, "Wall member asset unavailable");
+              }
+
+              return {
+                kind: "ASSET" as const,
+                assetId: tile.asset.id,
+                type: tile.asset.type,
+                sourceKind: "DISPLAY_WALL" as const,
+                sceneMode: creative.mode,
+                durationSeconds,
+              };
+            }
+
+            if (playlistItem.kind === "CREATIVE_PACKAGE") {
+              const creativePackage = playlistItem.creativePackage;
+              if (!creativePackage || creativePackage.status !== "APPROVED") {
+                return syncGap(
+                  playlistItem.durationSec ?? 10,
+                  "Creative package unavailable",
+                );
+              }
+
+              const selected = selectBestScreenVariant(
+                creativePackage.variants.filter(
+                  (variant) =>
+                    variant.asset.status === "READY" &&
+                    variant.asset.orientation === screen.orientation,
+                ),
+                { width: screen.width, height: screen.height },
+              );
+              if (!selected) {
+                return syncGap(
+                  playlistItem.durationSec ?? 10,
+                  "No compatible package variant",
+                );
+              }
+
+              return {
+                kind: "ASSET" as const,
+                assetId: selected.asset.id,
+                type: selected.asset.type,
+                sourceKind: "CREATIVE_PACKAGE" as const,
+                sceneMode: null,
+                durationSeconds:
+                  selected.asset.type === "VIDEO"
+                    ? selected.asset.durationSec ?? 15
+                    : playlistItem.durationSec ?? 10,
+              };
+            }
+
+            const asset = playlistItem.asset;
+            if (!asset || asset.status !== "READY" || asset.orientation !== screen.orientation) {
+              return syncGap(playlistItem.durationSec ?? 10, "Asset unavailable");
+            }
+
+            return {
+              kind: "ASSET" as const,
+              assetId: asset.id,
+              type: asset.type,
+              sourceKind: "ASSET" as const,
+              sceneMode: null,
+              durationSeconds:
+                asset.type === "VIDEO"
+                  ? asset.durationSec ?? 15
+                  : playlistItem.durationSec ?? 10,
+            };
+          });
+
           return {
             wallId: wall.id,
             wallName: wall.name,
@@ -317,12 +412,16 @@ export async function GET(req: Request, ctx: Ctx) {
             occurrenceKey: schedule.occurrenceKey,
             manifestVersion: version,
             scheduledStartAt: schedule.startAt.toISOString(),
+            scheduledStartEpochMs: schedule.startAt.getTime(),
             scheduledEndAt: schedule.endAt.toISOString(),
+            scheduledEndEpochMs: schedule.endAt.getTime(),
             releaseAt: run?.releaseAt?.toISOString() ?? null,
+            releaseEpochMs: run?.releaseAt?.getTime() ?? null,
             runStatus: run?.status ?? "PREPARING",
             failurePolicy: wall.failurePolicy,
             requireAllMembersReady: wall.requireAllMembersReady,
             assets,
+            timeline,
           };
         })()
       : null;
