@@ -54,6 +54,30 @@ export default async function PlaylistsPage() {
     }),
   ]);
 
+  const normalizedWallCreatives = serialize(wallCreatives).map((creative) => ({
+    ...creative,
+    masterWidth: creative.masterWidth ?? creative.wall.canvasWidth,
+    masterHeight: creative.masterHeight ?? creative.wall.canvasHeight,
+  }));
+
+  const normalizedPlaylists = serialize(playlists).map((playlist) => ({
+    ...playlist,
+    items: playlist.items.map((item) => ({
+      ...item,
+      displayWallCreative: item.displayWallCreative
+        ? {
+            ...item.displayWallCreative,
+            masterWidth:
+              item.displayWallCreative.masterWidth ??
+              item.displayWallCreative.wall.canvasWidth,
+            masterHeight:
+              item.displayWallCreative.masterHeight ??
+              item.displayWallCreative.wall.canvasHeight,
+          }
+        : null,
+    })),
+  }));
+
   return (
     <AdminShell
       active="playlists"
@@ -61,9 +85,9 @@ export default async function PlaylistsPage() {
       description="Build ordered rotations with ordinary screen assets and synchronized wall scenes."
     >
       <PlaylistsPanel
-        initialPlaylists={serialize(playlists)}
+        initialPlaylists={normalizedPlaylists}
         assets={serialize(assets)}
-        wallCreatives={serialize(wallCreatives)}
+        wallCreatives={normalizedWallCreatives}
       />
     </AdminShell>
   );
