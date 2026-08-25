@@ -1,8 +1,13 @@
 // app/api/v1/screens/[deviceId]/playlist/route.ts
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import { requestHasValidDeviceToken } from "@/lib/device-auth";
+
 import { selectBestScreenVariant } from "@/lib/creative-packages";
+import { requestHasValidDeviceToken } from "@/lib/device-auth";
+import { prisma } from "@/lib/prisma";
+import {
+  wallManifestVersion,
+  wallPreloadWindowStart,
+} from "@/lib/wall-resilience";
 
 export const runtime = "nodejs";
 
@@ -33,6 +38,10 @@ function syncGap(durationSeconds: number, reason: string) {
   };
 }
 
+function runKey(wallId: string, campaignId: string, occurrenceKey: string) {
+  return `${wallId}:${campaignId}:${occurrenceKey}`;
+}
+
 export async function GET(req: Request, ctx: Ctx) {
   const { deviceId } = await ctx.params;
 
@@ -41,6 +50,7 @@ export async function GET(req: Request, ctx: Ctx) {
     include: {
       schedules: {
         include: {
+          campaign: true,
           displayWall: {
             include: { members: true },
           },
@@ -87,10 +97,87 @@ export async function GET(req: Request, ctx: Ctx) {
   }
 
   const now = new Date();
+  const wallSchedules = screen.schedules.filter(
+    (schedule) => schedule.displayWall && schedule.campaign,
+  );
 
-  const activeSchedule = screen.schedules
+  const wallRuns = wallSchedules.length
+    ? await prisma.displayWallRun.findMany({
+        where: {
+          OR: wallSchedules.map((schedule) => ({
+            wallId: schedule.displayWallId!,
+            campaignId: schedule.campaignId!,
+            occurrenceKey: schedule.occurrenceKey,
+          })),
+        },
+      })
+    : [];
+
+  const runMap = new Map(
+    wallRuns.map((run) => [runKey(run.wallId, run.campaignId, run.occurrenceKey), run]),
+  );
+
+  function manifestVersionFor(schedule: (typeof screen.schedules)[number]) {
+    if (!schedule.displayWall || !schedule.campaign) return null;
+
+    return wallManifestVersion({
+      wallId: schedule.displayWall.id,
+      wallUpdatedAt: schedule.displayWall.updatedAt,
+      campaignId: schedule.campaign.id,
+      campaignUpdatedAt: schedule.campaign.updatedAt,
+      playlistId: schedule.playlist.id,
+      playlistUpdatedAt: schedule.playlist.updatedAt,
+      occurrenceKey: schedule.occurrenceKey,
+    });
+  }
+
+  const activeCandidates = screen.schedules
     .filter((schedule: ScheduleLike) => schedule.startAt <= now && schedule.endAt >= now)
-    .sort((a: ScheduleLike, b: ScheduleLike) => b.priority - a.priority)[0];
+    .sort((a: ScheduleLike, b: ScheduleLike) => b.priority - a.priority);
+
+  let activeSchedule: (typeof screen.schedules)[number] | null = null;
+  let activeWallRun: (typeof wallRuns)[number] | null = null;
+
+  for (const candidate of activeCandidates) {
+    if (!candidate.displayWall) {
+      activeSchedule = candidate;
+      break;
+    }
+
+    if (!candidate.campaignId || !candidate.campaign) continue;
+
+    const version = manifestVersionFor(candidate);
+    const run = runMap.get(
+      runKey(candidate.displayWall.id, candidate.campaign.id, candidate.occurrenceKey),
+    );
+
+    if (
+      version &&
+      run &&
+      run.manifestVersion === version &&
+      (run.status === "ARMED" || run.status === "RUNNING") &&
+      run.releaseAt &&
+      run.releaseAt <= now
+    ) {
+      activeSchedule = candidate;
+      activeWallRun = run;
+      break;
+    }
+  }
+
+  const pendingWallSchedule = wallSchedules
+    .filter((schedule) => {
+      if (schedule.endAt < now || !schedule.displayWall) return false;
+      const preloadStart = wallPreloadWindowStart({
+        scheduledStartAt: schedule.startAt,
+        preloadLeadSec: schedule.displayWall.preloadLeadSec,
+      });
+      return preloadStart <= now;
+    })
+    .sort((a, b) => {
+      if (a.priority !== b.priority) return b.priority - a.priority;
+      return a.startAt.getTime() - b.startAt.getTime();
+    })[0] ?? null;
 
   const baseDevice = {
     deviceId: screen.deviceId,
@@ -103,26 +190,134 @@ export async function GET(req: Request, ctx: Ctx) {
     timezone: screen.timezone,
   };
 
+  const preload = pendingWallSchedule?.displayWall && pendingWallSchedule.campaign
+    ? (() => {
+        const schedule = pendingWallSchedule;
+        const wall = schedule.displayWall!;
+        const version = manifestVersionFor(schedule)!;
+        const run = runMap.get(runKey(wall.id, schedule.campaign!.id, schedule.occurrenceKey));
+
+        const assets = schedule.playlist.items.flatMap((playlistItem) => {
+          if (playlistItem.kind === "DISPLAY_WALL") {
+            const creative = playlistItem.displayWallCreative;
+            if (!creative || creative.status !== "READY" || creative.wallId !== wall.id) {
+              return [];
+            }
+
+            const tile = creative.tiles.find(
+              (candidate) => candidate.member.screenId === screen.id,
+            );
+            if (!tile || tile.asset.status !== "READY") return [];
+
+            const rendition = selectBestScreenVariant(tile.asset.renditions, {
+              width: screen.width,
+              height: screen.height,
+            });
+
+            return [
+              {
+                assetId: tile.asset.id,
+                url: rendition?.url ?? tile.asset.masterUrl,
+                type: tile.asset.type,
+                sourceKind: "DISPLAY_WALL" as const,
+                sceneMode: creative.mode,
+              },
+            ];
+          }
+
+          if (playlistItem.kind === "CREATIVE_PACKAGE") {
+            const creativePackage = playlistItem.creativePackage;
+            if (!creativePackage || creativePackage.status !== "APPROVED") return [];
+
+            const selected = selectBestScreenVariant(
+              creativePackage.variants.filter(
+                (variant) =>
+                  variant.asset.status === "READY" &&
+                  variant.asset.orientation === screen.orientation,
+              ),
+              { width: screen.width, height: screen.height },
+            );
+
+            return selected
+              ? [
+                  {
+                    assetId: selected.asset.id,
+                    url: selected.asset.masterUrl,
+                    type: selected.asset.type,
+                    sourceKind: "CREATIVE_PACKAGE" as const,
+                    sceneMode: null,
+                  },
+                ]
+              : [];
+          }
+
+          if (playlistItem.kind === "ASSET") {
+            const asset = playlistItem.asset;
+            if (!asset || asset.status !== "READY" || asset.orientation !== screen.orientation) {
+              return [];
+            }
+
+            const rendition = selectBestScreenVariant(asset.renditions, {
+              width: screen.width,
+              height: screen.height,
+            });
+
+            return [
+              {
+                assetId: asset.id,
+                url: rendition?.url ?? asset.masterUrl,
+                type: asset.type,
+                sourceKind: "ASSET" as const,
+                sceneMode: null,
+              },
+            ];
+          }
+
+          return [];
+        });
+
+        return {
+          wallId: wall.id,
+          wallName: wall.name,
+          campaignId: schedule.campaign!.id,
+          occurrenceKey: schedule.occurrenceKey,
+          manifestVersion: version,
+          scheduledStartAt: schedule.startAt.toISOString(),
+          scheduledEndAt: schedule.endAt.toISOString(),
+          releaseAt: run?.releaseAt?.toISOString() ?? null,
+          runStatus: run?.status ?? "PREPARING",
+          failurePolicy: wall.failurePolicy,
+          requireAllMembersReady: wall.requireAllMembersReady,
+          assets,
+        };
+      })()
+    : null;
+
   if (!activeSchedule) {
     return NextResponse.json({
       device: baseDevice,
       items: [],
       sync: null,
+      preload,
       generatedAt: now.toISOString(),
-      pollSeconds: 60,
+      pollSeconds: preload ? 1 : 60,
     });
   }
 
   const wall = activeSchedule.displayWall;
   const wallMember = wall?.members.find((member) => member.screenId === screen.id) ?? null;
+  const activeManifestVersion = wall ? manifestVersionFor(activeSchedule) : null;
   const sync = wall
     ? {
         mode: "DISPLAY_WALL" as const,
         wallId: wall.id,
         wallName: wall.name,
-        epochMs: activeSchedule.startAt.getTime(),
+        epochMs: activeWallRun?.releaseAt?.getTime() ?? activeSchedule.startAt.getTime(),
         serverNowMs: now.getTime(),
         toleranceMs: wall.syncToleranceMs,
+        hardResyncMs: wall.hardResyncMs,
+        failurePolicy: wall.failurePolicy,
+        manifestVersion: activeManifestVersion,
         canvasWidth: wall.canvasWidth,
         canvasHeight: wall.canvasHeight,
         member: wallMember
@@ -168,17 +363,17 @@ export async function GET(req: Request, ctx: Ctx) {
             : playlistItem.durationSec ?? 10;
 
         if (!sync || !creative || creative.status !== "READY") {
-          return sync ? syncGap(durationSeconds, "Wall creative unavailable") : null;
+          return sync ? syncGap(durationSeconds, "Wall scene unavailable") : null;
         }
         if (creative.wallId !== sync.wallId) {
-          return syncGap(durationSeconds, "Wall creative targets a different wall");
+          return syncGap(durationSeconds, "Wall scene targets a different cluster");
         }
 
         const tile = creative.tiles.find(
           (candidate) => candidate.member.screenId === screen.id,
         );
         if (!tile || tile.asset.status !== "READY") {
-          return syncGap(durationSeconds, "Wall tile unavailable");
+          return syncGap(durationSeconds, "Wall member asset unavailable");
         }
 
         const selectedRendition = selectBestScreenVariant(
@@ -189,6 +384,7 @@ export async function GET(req: Request, ctx: Ctx) {
         return {
           kind: "ASSET" as const,
           sourceKind: "DISPLAY_WALL" as const,
+          sceneMode: creative.mode,
           wallId: creative.wallId,
           wallCreativeId: creative.id,
           wallCreativeName: creative.name,
@@ -227,11 +423,6 @@ export async function GET(req: Request, ctx: Ctx) {
         return {
           kind: "ASSET" as const,
           sourceKind: "CREATIVE_PACKAGE" as const,
-          packageId: creativePackage.id,
-          packageName: creativePackage.name,
-          brand: creativePackage.brand,
-          variantId: selected.id,
-          presetKey: selected.presetKey,
           assetId: selected.asset.id,
           type: selected.asset.type,
           url: selected.asset.masterUrl,
@@ -271,10 +462,20 @@ export async function GET(req: Request, ctx: Ctx) {
     })
     .filter(Boolean);
 
+  if (wall && activeWallRun?.status === "ARMED") {
+    void prisma.displayWallRun
+      .update({
+        where: { id: activeWallRun.id },
+        data: { status: "RUNNING" },
+      })
+      .catch(() => null);
+  }
+
   return NextResponse.json({
     device: baseDevice,
     generatedAt: now.toISOString(),
-    pollSeconds: sync ? 15 : 60,
+    pollSeconds: preload ? 1 : sync ? 15 : 60,
+    preload,
     sync,
     items,
   });
